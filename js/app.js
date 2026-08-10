@@ -45,6 +45,11 @@ const App = {
         const startPage = location.hash.slice(1) || 'dashboard';
         this.navigate(startPage);
         window.addEventListener('hashchange', () => this.navigate(location.hash.slice(1)));
+
+        // Авто-загрузка данных из облака при старте
+        if (typeof Storage !== 'undefined' && Storage.pullFromCloud) {
+            Storage.pullFromCloud(true);
+        }
     },
 
     navigate(pageId) {
@@ -65,7 +70,16 @@ const App = {
                 <span class="nav-icon">${page.icon}</span>
                 <span>${page.title}</span>
             </a>
-        `).join('');
+        `).join('') + `
+        <div style="margin-top:auto; padding:12px; border-top:1px solid var(--border-subtle)">
+            <button class="btn btn-secondary btn-block btn-sm" id="btn-open-cloud-sync" style="font-size:12px; justify-content:center;">
+                ☁️ <span id="sidebar-cloud-status">Облако</span>
+            </button>
+        </div>`;
+
+        setTimeout(() => {
+            document.getElementById('btn-open-cloud-sync')?.addEventListener('click', () => Storage.showSyncModal());
+        }, 100);
     },
 
     renderPage() {
