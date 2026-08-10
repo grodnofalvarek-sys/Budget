@@ -1,0 +1,410 @@
+/* ===========================================
+   Accounts — Управление счетами
+   =========================================== */
+
+const Accounts = {
+    STORAGE_KEY: 'accounts',
+    TRANSFER_KEY: 'transfers',
+
+    DEFAULTS: [
+        { name: 'Revolut', balance: 0, isVisible: true, isDefault: true },
+        { name: 'Наличные', balance: 0, isVisible: true, isDefault: false },
+        { name: 'Банк', balance: 0, isVisible: true, isDefault: false },
+        { name: 'Пенсионный', balance: 0, isVisible: false, isDefault: false },
+    ],
+
+    init() {
+        let list = Storage.get(this.STORAGE_KEY);
+        if (!list) {
+            list = this.DEFAULTS.map(a => ({
+                id: generateId(),
+                name: a.name,
+                initialBalance: a.balance || 0,
+                currency: 'EUR',
+                isVisible: a.isVisible,
+                isDefault: a.isDefault
+            }));
+            Storage.set(this.STORAGE_KEY, list);
+        } else {
+            // Миграция существующих счетов на использование initialBalance
+            let needsSave = false;
+            list.forEach(a => {
+                if (a.initialBalance === undefined) {
+                    const journalDelta = this.getJournalDeltaForAccount(a.id);
+                    const transferDelta = this.getTransferDeltaForAccount(a.id);
+                    const currentStored = a.balance !== undefined ? a.balance : 0;
+                    a.initialBalance = currentStored - journalDelta - transferDelta;
+                    delete a.balance;
+                    needsSave = true;
+                }
+            });
+            if (needsSave) {
+                Storage.set(this.STORAGE_KEY, list);
+            }
+        }
+    },
+
+    getAll()    { return Storage.get(this.STORAGE_KEY) || []; },
+    save(list)  { Storage.set(this.STORAGE_KEY, list); },
+    getById(id) { return this.getAll().find(a => a.id === id); },
+
+    /* --- Расчёт баланса на основе Журнала и Переводов --- */
+
+    getJournalDeltaForAccount(accId) {
+        if (typeof Journal === 'undefined') return 0;
+        const allTx = Journal.getAll();
+        return allTx.reduce((sum, t) => {
+            if (t.accountId !== accId) return sum;
+            return sum + (t.type === 'income' ? t.amount : -t.amount);
+        }, 0);
+    },
+
+    getTransferDeltaForAccount(accId) {
+        const transfers = this.getTransfers();
+        return transfers.reduce((sum, tr) => {
+            if (tr.fromId === accId) sum -= tr.amount;
+            if (tr.toId === accId) sum += tr.amount;
+            return sum;
+        }, 0);
+    },
+
+    getSharedDeltaForAccount(accId) {
+        if (typeof Shared === 'undefined' || !Shared.getTransactions) return 0;
+        const sharedTxs = Shared.getTransactions() || [];
+        return sharedTxs.reduce((sum, t) => {
+            if (t.type === 'my_deposit' && t.accountId === accId) {
+                return sum - (t.amount || 0);
+            }
+            return sum;
+        }, 0);
+    },
+
+    getCurrencyDeltaForAccount(accId) {
+        if (typeof Currency === 'undefined' || !Currency.getTransactions) return 0;
+        const currencyTxs = Currency.getTransactions() || [];
+        return currencyTxs.reduce((sum, t) => {
+            if (t.type === 'deposit' && t.sourceAccountId === accId) {
+                return sum - (parseFloat(t.spentEur) || 0);
+            }
+            return sum;
+        }, 0);
+    },
+
+    getBalance(accId) {
+        const acc = this.getById(accId);
+        if (!acc) return 0;
+        const initBal = acc.initialBalance !== undefined ? acc.initialBalance : (acc.balance || 0);
+        return initBal + this.getJournalDeltaForAccount(accId) + this.getTransferDeltaForAccount(accId) + this.getSharedDeltaForAccount(accId) + this.getCurrencyDeltaForAccount(accId);
+    },
+
+    getTotalBalance() {
+        return this.getAll().filter(a => a.isVisible).reduce((s, a) => s + this.getBalance(a.id), 0);
+    },
+
+    add(data) {
+        const list = this.getAll();
+        list.push({
+            id: generateId(),
+            name: data.name,
+            initialBalance: parseFloat(data.initialBalance) || 0,
+            currency: 'EUR',
+            isVisible: true,
+            isDefault: list.length === 0
+        });
+        this.save(list);
+    },
+
+    update(id, data) {
+        const list = this.getAll();
+        const acc = list.find(a => a.id === id);
+        if (acc) {
+            acc.name = data.name;
+            this.save(list);
+        }
+    },
+
+    remove(id) {
+        const list = this.getAll().filter(a => a.id !== id);
+        if (list.length && !list.some(a => a.isDefault)) list[0].isDefault = true;
+        this.save(list);
+    },
+
+    toggleVisibility(id) {
+        const list = this.getAll();
+        const acc = list.find(a => a.id === id);
+        if (acc) { acc.isVisible = !acc.isVisible; this.save(list); }
+    },
+
+    setDefault(id) {
+        const list = this.getAll();
+        list.forEach(a => a.isDefault = (a.id === id));
+        this.save(list);
+    },
+
+    /* --- Переводы между счетами --- */
+
+    getTransfers() {
+        const list = Storage.get(this.TRANSFER_KEY) || [];
+        return list.slice().sort((a, b) => {
+            if (a.date !== b.date) {
+                return a.date.localeCompare(b.date);
+            }
+            return (a.id || '').localeCompare(b.id || '');
+        });
+    },
+    
+    saveTransfers(t) { Storage.set(this.TRANSFER_KEY, t); },
+
+    addTransfer(data) {
+        const transfers = Storage.get(this.TRANSFER_KEY) || [];
+        transfers.unshift({
+            id: generateId(),
+            date: data.date,
+            fromId: data.fromId,
+            toId: data.toId,
+            amount: data.amount,
+            note: data.note
+        });
+        this.saveTransfers(transfers);
+    },
+
+    updateTransfer(id, newData) {
+        const transfers = Storage.get(this.TRANSFER_KEY) || [];
+        const tr = transfers.find(t => t.id === id);
+        if (!tr) return;
+
+        tr.date = newData.date;
+        tr.fromId = newData.fromId;
+        tr.toId = newData.toId;
+        tr.amount = parseFloat(newData.amount) || 0;
+        tr.note = newData.note || '';
+
+        this.saveTransfers(transfers);
+    },
+
+    removeTransfer(id) {
+        const transfers = this.getTransfers().filter(t => t.id !== id);
+        this.saveTransfers(transfers);
+    },
+
+    accountName(id) {
+        const acc = this.getById(id);
+        return acc ? acc.name : '(удалён)';
+    },
+
+    /* --- Рендеринг --- */
+
+    render() {
+        const accounts = this.getAll();
+        const total = this.getTotalBalance();
+        const transfers = this.getTransfers();
+
+        return `
+            <div class="card-grid">
+                <div class="card card-accent">
+                    <div class="card-title">Общий баланс</div>
+                    <div class="card-value ${total >= 0 ? 'positive' : 'negative'}">${formatMoney(total)}</div>
+                    <div class="card-hint">Сумма видимых счетов</div>
+                </div>
+            </div>
+
+            <div class="section-header">
+                <h2 class="section-title">Личные счета</h2>
+                <button class="btn btn-primary" id="btn-add-account">+ Добавить</button>
+                <button class="btn btn-secondary" id="btn-transfer">↔ Перевод</button>
+            </div>
+
+            <div class="card-grid">
+                ${accounts.map(a => {
+                    const currentBalance = this.getBalance(a.id);
+                    return `
+                    <div class="card ${a.isVisible ? '' : 'card-dimmed'}">
+                        <div class="card-row">
+                            <span class="card-name">${a.name}</span>
+                            <label class="toggle" title="${a.isVisible ? 'Скрыть из баланса' : 'Показать в балансе'}">
+                                <input type="checkbox" data-action="toggle-vis" data-id="${a.id}" ${a.isVisible ? 'checked' : ''}>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="card-value">${formatMoney(currentBalance)}</div>
+                        <div class="card-row">
+                            <span class="badge">${a.currency}</span>
+                            <div class="card-actions">
+                                ${a.isDefault
+                                    ? '<span class="badge badge-accent">По умолчанию</span>'
+                                    : `<button class="btn btn-set-default" data-action="set-default" data-id="${a.id}">По умолчанию</button>`}
+                                <button class="btn-icon" data-action="edit" data-id="${a.id}" title="Редактировать название">✏️</button>
+                                <button class="btn-icon" data-action="delete" data-id="${a.id}" title="Удалить счёт">🗑️</button>
+                            </div>
+                        </div>
+                    </div>`;
+                }).join('')}
+            </div>
+
+            ${transfers.length ? `
+            <div class="section-header" style="margin-top:32px">
+                <h2 class="section-title">История переводов</h2>
+            </div>
+            <div class="transfer-list">
+                ${transfers.map(t => `
+                    <div class="transfer-item">
+                        <span class="transfer-date">${formatDate(t.date)}</span>
+                        <span class="transfer-route">${this.accountName(t.fromId)} → ${this.accountName(t.toId)}</span>
+                        <span class="transfer-amount">${formatMoney(t.amount)}</span>
+                        <span class="transfer-note">${t.note || ''}</span>
+                        <div class="card-actions">
+                            <button class="btn-icon" data-action="edit-transfer" data-id="${t.id}" title="Редактировать перевод">✏️</button>
+                            <button class="btn-icon" data-action="delete-transfer" data-id="${t.id}" title="Удалить перевод">🗑️</button>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>` : ''}`;
+    },
+
+    afterRender() {
+        document.getElementById('btn-add-account')?.addEventListener('click', () => this.showModal());
+        document.getElementById('btn-transfer')?.addEventListener('click', () => this.showTransferModal());
+
+        const content = document.getElementById('content');
+
+        /* Toggle видимости — checkbox */
+        content.addEventListener('change', (e) => {
+            if (e.target.dataset.action === 'toggle-vis') {
+                this.toggleVisibility(e.target.dataset.id);
+                App.renderPage();
+            }
+        });
+
+        /* Кнопки действий */
+        content.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-action]');
+            if (!btn || btn.tagName === 'INPUT') return;
+            const { action, id } = btn.dataset;
+
+            switch (action) {
+                case 'set-default':     this.setDefault(id); App.renderPage(); break;
+                case 'edit':            this.showModal(id); break;
+                case 'delete':
+                    const acc = this.getById(id);
+                    App.showConfirm(`Удалить счёт «${acc.name}»?`, () => { this.remove(id); App.renderPage(); });
+                    break;
+                case 'edit-transfer':   this.showTransferModal(id); break;
+                case 'delete-transfer':
+                    App.showConfirm('Удалить запись о переводе?', () => { this.removeTransfer(id); App.renderPage(); });
+                    break;
+            }
+        });
+    },
+
+    showModal(editId = null) {
+        const acc = editId ? this.getById(editId) : null;
+        const isEdit = !!editId;
+
+        App.showModal(isEdit ? 'Редактировать название счёта' : 'Новый счёт', `
+            <form id="modal-form">
+                <div class="form-group">
+                    <label class="form-label">Название счёта</label>
+                    <input type="text" class="form-input" name="name" value="${acc?.name || ''}" placeholder="например, Карта Visa" required autocomplete="off">
+                </div>
+                ${!isEdit ? `
+                <div class="form-group">
+                    <label class="form-label">Начальный баланс (€)</label>
+                    <input type="number" class="form-input" name="initialBalance" step="0.01" value="0.00">
+                </div>` : ''}
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        `);
+
+        document.getElementById('modal-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = e.target.name.value.trim();
+            if (!name) return;
+
+            if (isEdit) {
+                this.update(editId, { name });
+            } else {
+                const initialBalance = parseFloat(e.target.initialBalance?.value) || 0;
+                this.add({ name, initialBalance });
+            }
+            App.closeModal();
+            App.renderPage();
+        });
+    },
+
+    showTransferModal(editId = null) {
+        const accounts = this.getAll();
+        const isEdit = !!editId;
+        const tr = isEdit ? this.getTransfers().find(t => t.id === editId) : null;
+
+        const defaultDate = tr ? tr.date : new Date().toISOString().split('T')[0];
+        const defaultFrom = tr ? tr.fromId : (accounts[0]?.id || '');
+        const defaultTo = tr ? tr.toId : (accounts[1]?.id || accounts[0]?.id || '');
+        const defaultAmount = tr ? tr.amount : '';
+        const defaultNote = tr ? tr.note : '';
+
+        const renderAccountOptions = (selectedId) => {
+            return accounts.map(a => `<option value="${a.id}" ${a.id === selectedId ? 'selected' : ''}>${a.name} — ${formatMoney(this.getBalance(a.id))}</option>`).join('');
+        };
+
+        App.showModal(isEdit ? 'Редактировать перевод' : 'Перевод между счетами', `
+            <form id="modal-form">
+                <div class="form-group">
+                    <label class="form-label">Дата</label>
+                    <input type="date" class="form-input" name="date" id="modal-transfer-date" value="${defaultDate}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Со счёта</label>
+                    <select class="form-input" name="fromId" required>${renderAccountOptions(defaultFrom)}</select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">На счёт</label>
+                    <select class="form-input" name="toId" required>${renderAccountOptions(defaultTo)}</select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Сумма (€)</label>
+                    <input type="number" class="form-input" name="amount" step="0.01" min="0.01" value="${defaultAmount}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Пояснение</label>
+                    <input type="text" class="form-input" name="note" placeholder="необязательно" value="${defaultNote}">
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Отмена</button>
+                    <button type="submit" class="btn btn-primary">${isEdit ? 'Сохранить изменения' : 'Перевести'}</button>
+                </div>
+            </form>
+        `);
+
+        const dateInputModal = document.getElementById('modal-transfer-date');
+        dateInputModal?.addEventListener('click', () => {
+            if (typeof dateInputModal.showPicker === 'function') {
+                try { dateInputModal.showPicker(); } catch (err) {}
+            }
+        });
+
+        document.getElementById('modal-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const f = e.target;
+            if (f.fromId.value === f.toId.value) { alert('Выберите разные счета'); return; }
+
+            const payload = {
+                date: f.date.value,
+                fromId: f.fromId.value,
+                toId: f.toId.value,
+                amount: parseFloat(f.amount.value) || 0,
+                note: f.note.value.trim()
+            };
+
+            if (isEdit) {
+                this.updateTransfer(editId, payload);
+            } else {
+                this.addTransfer(payload);
+            }
+            App.closeModal();
+            App.renderPage();
+        });
+    }
+};
