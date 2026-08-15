@@ -32,6 +32,17 @@ const App = {
     },
 
     currentPage: null,
+    currentMonth: new Date().toISOString().slice(0, 7), // "YYYY-MM"
+
+    setMonth(newMonth) {
+        if (!newMonth) return;
+        this.currentMonth = newMonth;
+        if (typeof Journal !== 'undefined') {
+            Journal.currentMonth = newMonth;
+            Journal.selectedDate = '';
+        }
+        this.renderPage();
+    },
 
     init() {
         if (typeof Storage !== 'undefined' && Storage.init) {
@@ -87,6 +98,11 @@ const App = {
         const page = this.pages[this.currentPage];
         const content = document.getElementById('content');
 
+        const hasMonthBar = ['dashboard', 'journal', 'accounts', 'categories', 'shared', 'currency'].includes(this.currentPage);
+        const monthName = (typeof DatePicker !== 'undefined' && DatePicker.formatMonth) 
+            ? DatePicker.formatMonth(this.currentMonth) 
+            : this.currentMonth;
+
         let body;
         if (page.module) {
             body = page.module.render();
@@ -103,9 +119,27 @@ const App = {
             <div class="page-header">
                 <h1 class="page-title">${page.icon} ${page.title}</h1>
                 <p class="page-subtitle">${page.subtitle}</p>
+                ${hasMonthBar ? `
+                    <div class="page-month-bar">
+                        <span class="page-month-label">Месяц:</span>
+                        <button type="button" class="btn-month-picker" id="btn-global-month-picker">
+                            <span>${monthName}</span>
+                            <span class="btn-month-picker-icon">📅</span>
+                        </button>
+                    </div>
+                ` : ''}
             </div>
             ${body}
         `;
+
+        if (hasMonthBar) {
+            document.getElementById('btn-global-month-picker')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                DatePicker.openMonthPicker(e.currentTarget, this.currentMonth, (newMonth) => {
+                    this.setMonth(newMonth);
+                });
+            });
+        }
 
         if (page.module && page.module.afterRender) {
             page.module.afterRender();

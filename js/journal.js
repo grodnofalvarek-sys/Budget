@@ -171,7 +171,7 @@ const Journal = {
     /* --- Рендеринг страницы Журнала --- */
 
     render() {
-        const monthStr = this.currentMonth;
+        const monthStr = (typeof App !== 'undefined' && App.currentMonth) ? App.currentMonth : this.currentMonth;
         const daysInMonth = this.getDaysInMonth(monthStr);
         const { plannedIncome, plannedMandatory } = this.getMonthBudget(monthStr);
 
@@ -245,15 +245,11 @@ const Journal = {
         const accounts = Accounts.getAll();
 
         return `
-            <!-- Верхняя панель настройки и выбора месяца -->
-            <div class="journal-header-bar">
-                <div class="journal-month-picker">
-                    <label class="form-label" style="margin:0">Месяц:</label>
-                    <input type="month" id="journal-month-input" class="form-input" value="${monthStr}" style="width: auto;">
-                </div>
-                <div class="journal-actions">
-                    <button class="btn btn-secondary" id="btn-budget-settings">⚙️ План месяца</button>
+            <!-- Верхняя панель настройки журнала -->
+            <div class="journal-header-bar" style="display:flex; justify-content:flex-start; margin-bottom:20px;">
+                <div class="journal-actions" style="display:flex; gap:10px;">
                     <button class="btn btn-primary" id="btn-add-tx">+ Записать операцию</button>
+                    <button class="btn btn-secondary" id="btn-budget-settings">⚙️ План месяца</button>
                 </div>
             </div>
 

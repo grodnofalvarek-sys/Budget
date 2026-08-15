@@ -95,7 +95,7 @@ const Categories = {
 
     render() {
         const cats = this.getAll();
-        const currentMonth = new Date().toISOString().slice(0, 7);
+        const currentMonth = (typeof App !== 'undefined' && App.currentMonth) ? App.currentMonth : new Date().toISOString().slice(0, 7);
         const monthTx = (typeof Journal !== 'undefined' && Journal.getAll) 
             ? Journal.getAll().filter(t => t && t.date && t.date.startsWith(currentMonth)) 
             : [];

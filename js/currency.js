@@ -221,7 +221,7 @@ const Currency = {
         }
 
         const today = new Date();
-        const currentMonth = today.toISOString().slice(0, 7);
+        const currentMonth = (typeof App !== 'undefined' && App.currentMonth) ? App.currentMonth : today.toISOString().slice(0, 7);
 
         const currentBalanceLocal = this.getBalance(activeAcc.id);
         const avgRate = this.getAverageRate(activeAcc.id);

@@ -192,12 +192,19 @@ const Accounts = {
         return acc ? acc.name : '(удалён)';
     },
 
+    filterMonthOnly: true,
+
     /* --- Рендеринг --- */
 
     render() {
         const accounts = this.getAll();
         const total = this.getTotalBalance();
-        const transfers = this.getTransfers();
+        const allTransfers = this.getTransfers();
+        const currentMonth = (typeof App !== 'undefined' && App.currentMonth) ? App.currentMonth : new Date().toISOString().slice(0, 7);
+        const monthName = (typeof DatePicker !== 'undefined' && DatePicker.formatMonth) ? DatePicker.formatMonth(currentMonth) : currentMonth;
+
+        const monthTransfers = allTransfers.filter(t => t.date && t.date.startsWith(currentMonth));
+        const visibleTransfers = this.filterMonthOnly ? monthTransfers : allTransfers;
 
         return `
             <div class="card-grid">
@@ -241,12 +248,21 @@ const Accounts = {
                 }).join('')}
             </div>
 
-            ${transfers.length ? `
-            <div class="section-header" style="margin-top:32px">
+            <div class="section-header" style="margin-top:32px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
                 <h2 class="section-title">История переводов</h2>
+                ${allTransfers.length > 0 ? `
+                <div style="display:flex; gap:6px; background:var(--bg-card-hover); padding:3px; border-radius:var(--radius-sm);">
+                    <button class="btn btn-sm ${this.filterMonthOnly ? 'btn-primary' : 'btn-secondary'}" id="btn-transfer-filter-month" style="font-size:11px; padding:3px 10px;">
+                        За ${monthName} (${monthTransfers.length})
+                    </button>
+                    <button class="btn btn-sm ${!this.filterMonthOnly ? 'btn-primary' : 'btn-secondary'}" id="btn-transfer-filter-all" style="font-size:11px; padding:3px 10px;">
+                        Все (${allTransfers.length})
+                    </button>
+                </div>` : ''}
             </div>
+            ${visibleTransfers.length > 0 ? `
             <div class="transfer-list">
-                ${transfers.map(t => `
+                ${visibleTransfers.map(t => `
                     <div class="transfer-item">
                         <span class="transfer-date">${formatDate(t.date)}</span>
                         <span class="transfer-route">${this.accountName(t.fromId)} → ${this.accountName(t.toId)}</span>
@@ -258,12 +274,20 @@ const Accounts = {
                         </div>
                     </div>
                 `).join('')}
-            </div>` : ''}`;
+            </div>` : `<div class="card" style="text-align:center; color:var(--text-muted); padding:16px; font-size:13px;">В ${monthName} переводов не было</div>`}`;
     },
 
     afterRender() {
         document.getElementById('btn-add-account')?.addEventListener('click', () => this.showModal());
         document.getElementById('btn-transfer')?.addEventListener('click', () => this.showTransferModal());
+        document.getElementById('btn-transfer-filter-month')?.addEventListener('click', () => {
+            this.filterMonthOnly = true;
+            App.renderPage();
+        });
+        document.getElementById('btn-transfer-filter-all')?.addEventListener('click', () => {
+            this.filterMonthOnly = false;
+            App.renderPage();
+        });
 
         const content = document.getElementById('content');
 

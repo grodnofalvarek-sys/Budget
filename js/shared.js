@@ -159,7 +159,7 @@ const Shared = {
 
     render() {
         const today = new Date();
-        const currentMonth = today.toISOString().slice(0, 7);
+        const currentMonth = (typeof App !== 'undefined' && App.currentMonth) ? App.currentMonth : today.toISOString().slice(0, 7);
         
         const initBal = this.getInitialBalance();
         const currentBalance = this.getBalance();

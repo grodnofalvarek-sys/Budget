@@ -33,7 +33,7 @@ const Dashboard = {
     render() {
         try {
             const today = new Date();
-            const currentMonth = today.toISOString().slice(0, 7); // "YYYY-MM"
+            const currentMonth = (typeof App !== 'undefined' && App.currentMonth) ? App.currentMonth : today.toISOString().slice(0, 7);
             
             const allTx = (typeof Journal !== 'undefined' && Journal.getAll) ? (Journal.getAll() || []) : [];
             const monthTx = allTx.filter(t => t && t.date && t.date.startsWith(currentMonth));
@@ -48,14 +48,24 @@ const Dashboard = {
 
             // Дневной бюджет и средний расход в день
             let dailyPlan = 0;
-            const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-            if (typeof Journal !== 'undefined' && Journal.getBudgetForMonth) {
-                const budgetSettings = Journal.getBudgetForMonth(currentMonth) || {};
+            const [cYear, cMonthNum] = currentMonth.split('-').map(Number);
+            const daysInMonth = new Date(cYear, cMonthNum, 0).getDate();
+            if (typeof Journal !== 'undefined' && Journal.getMonthBudget) {
+                const budgetSettings = Journal.getMonthBudget(currentMonth) || {};
                 const pIncome = budgetSettings.plannedIncome || 0;
                 const pMandatory = budgetSettings.plannedMandatory || 0;
                 dailyPlan = Math.max(0, (pIncome - pMandatory) / daysInMonth);
             }
-            const daysPassed = Math.max(1, today.getDate());
+            
+            const todayMonthStr = today.toISOString().slice(0, 7);
+            let daysPassed = 1;
+            if (currentMonth < todayMonthStr) {
+                daysPassed = daysInMonth;
+            } else if (currentMonth === todayMonthStr) {
+                daysPassed = Math.max(1, today.getDate());
+            } else {
+                daysPassed = 1;
+            }
             const averageDailyExpense = actualCurrent / daysPassed;
             const isOverDailyPlan = dailyPlan > 0 && averageDailyExpense > dailyPlan;
 
@@ -68,18 +78,23 @@ const Dashboard = {
                 return (b.createdAt || '').localeCompare(a.createdAt || '');
             }).slice(0, 5);
 
-            // 4. Распределение общих расходов по категориям (Обязательные + Текущие)
+            // 4. Распределение по категориям текущих расходов
+            const currentCats = (typeof Categories !== 'undefined' && Categories.getAll) ? (Categories.getAll().current || []) : [];
             const categoryMap = {};
-            monthTx.filter(t => t.type === 'expense').forEach(t => {
+            monthTx.filter(t => t.type === 'expense' && t.expenseType === 'current').forEach(t => {
                 categoryMap[t.categoryId] = (categoryMap[t.categoryId] || 0) + (parseFloat(t.amount) || 0);
             });
-            const cats = (typeof Categories !== 'undefined' && Categories.getAll) ? (Categories.getAll() || {}) : {};
-            const allExpenseCategories = [...(cats.mandatory || []), ...(cats.current || [])];
-            const categoryStats = allExpenseCategories.map(c => ({
+
+            const categoryStats = currentCats.map(c => ({
+                id: c.id,
                 name: c.name,
                 amount: categoryMap[c.id] || 0
             })).filter(c => c.amount > 0).sort((a, b) => b.amount - a.amount);
             const maxCatAmount = Math.max(...categoryStats.map(c => c.amount), 1);
+
+            const formattedMonthName = (typeof DatePicker !== 'undefined' && DatePicker.formatMonth)
+                ? DatePicker.formatMonth(currentMonth)
+                : currentMonth;
 
             return `
                 <!-- Верхняя панель KPI метрик -->
@@ -93,7 +108,7 @@ const Dashboard = {
                     <div class="card">
                         <div class="card-title">Доход за месяц</div>
                         <div class="card-value positive">+${formatMoney(actualIncome)}</div>
-                        <div class="card-hint">Текущий месяц (${currentMonth})</div>
+                        <div class="card-hint">За ${formattedMonthName}</div>
                     </div>
 
                     <div class="card">
