@@ -976,3 +976,34 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
     box-shadow: 0 2px 8px var(--accent-glow);
 }
 
+/* ===========================================
+   Sync Toast Notification
+   =========================================== */
+.sync-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--bg-card);
+    border: 1px solid var(--accent-start);
+    color: var(--text-primary);
+    padding: 12px 18px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 10000;
+    transform: translateY(100px);
+    opacity: 0;
+    transition: all 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    pointer-events: none;
+}
+
+.sync-toast.visible {
+    transform: translateY(0);
+    opacity: 1;
+}
+
+

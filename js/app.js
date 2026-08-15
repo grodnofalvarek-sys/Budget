@@ -34,6 +34,9 @@ const App = {
     currentPage: null,
 
     init() {
+        if (typeof Storage !== 'undefined' && Storage.init) {
+            Storage.init();
+        }
         Accounts.init();
         Categories.init();
         Journal.init();
@@ -45,11 +48,6 @@ const App = {
         const startPage = location.hash.slice(1) || 'dashboard';
         this.navigate(startPage);
         window.addEventListener('hashchange', () => this.navigate(location.hash.slice(1)));
-
-        // Авто-загрузка данных из облака при старте
-        if (typeof Storage !== 'undefined' && Storage.pullFromCloud) {
-            Storage.pullFromCloud(true);
-        }
     },
 
     navigate(pageId) {
