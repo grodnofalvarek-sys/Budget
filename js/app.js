@@ -27,7 +27,7 @@ const App = {
         categories: { title: 'Категории',      icon: '📋', subtitle: 'Категории доходов и расходов', module: Categories },
         shared:     { title: 'Общий счёт',     icon: '🤝', subtitle: 'Семейные расходы и взносы',   module: Shared },
         currency:   { title: 'Валюты',         icon: '💱', subtitle: 'Валютные счета для поездок',   module: Currency },
-        toyota:     { title: 'Toyota',         icon: '🚗', subtitle: 'Лизинг и график погашения',   stage: 7 },
+        toyota:     { title: 'Toyota',         icon: '🚗', subtitle: 'Лизинг TOYOTA COROLLA CROSS (50/50)', module: Toyota },
         analytics:  { title: 'Аналитика',      icon: '📈', subtitle: 'Графики и тренды',            stage: 8 },
     },
 
@@ -43,6 +43,9 @@ const App = {
         Dashboard.init();
         Shared.init();
         Currency.init();
+        if (typeof Toyota !== 'undefined' && Toyota.init) {
+            Toyota.init();
+        }
         DatePicker.init();
         this.renderSidebar();
         const startPage = location.hash.slice(1) || 'dashboard';

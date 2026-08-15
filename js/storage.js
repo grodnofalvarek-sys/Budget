@@ -26,7 +26,8 @@ const Storage = {
         'shared_initial_balance',
         'currency_accounts',
         'currency_transactions',
-        'active_currency_account'
+        'active_currency_account',
+        'toyota_data'
     ],
 
     /* --- Инициализация Supabase и Realtime --- */
