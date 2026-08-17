@@ -44,9 +44,16 @@ const App = {
         this.renderPage();
     },
 
-    init() {
+    async init() {
         if (typeof Storage !== 'undefined' && Storage.init) {
-            Storage.init();
+            try {
+                await Promise.race([
+                    Storage.init(),
+                    new Promise(resolve => setTimeout(resolve, 1800))
+                ]);
+            } catch (e) {
+                console.warn('Storage.init error in App.init:', e);
+            }
         }
         Accounts.init();
         Categories.init();

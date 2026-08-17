@@ -1,5 +1,5 @@
 /* ===========================================
-   Storage — модуль хранилища и облачной синхронизации Supabase (v3.0)
+   Storage — модуль хранилища и облачной синхронизации Supabase (v3.5 с защитой Anti-Wipe)
    =========================================== */
 
 const Storage = {
@@ -14,6 +14,9 @@ const Storage = {
     client: null,
     realtimeChannel: null,
     lastPushedTimestamp: null,
+    isCloudReady: false,
+    isPulling: false,
+    isPushing: false,
 
     ALL_KEYS: [
         'accounts',
@@ -32,18 +35,19 @@ const Storage = {
 
     /* --- Инициализация Supabase и Realtime --- */
 
-    init() {
+    async init() {
         try {
             if (typeof window.supabase !== 'undefined' && window.supabase.createClient) {
                 this.client = window.supabase.createClient(this.SUPABASE_URL, this.SUPABASE_KEY);
                 this.initRealtime();
-                this.pullFromCloud(true);
+                await this.pullFromCloud(true);
             } else {
                 console.warn('Supabase SDK not loaded yet. Retrying in 1s.');
                 setTimeout(() => this.init(), 1000);
             }
         } catch (err) {
             console.error('Storage.init error:', err);
+            this.isCloudReady = true;
             this.updateCloudStatusUI('🟡 Офлайн');
         }
     },
@@ -61,7 +65,6 @@ const Storage = {
                 }, (payload) => {
                     const row = payload.new;
                     if (row && row.id === this.ROW_ID && row.payload && row.payload.data) {
-                        // Игнорируем эхо собственного недавнего пуша
                         if (row.payload.syncedAt && row.payload.syncedAt === this.lastPushedTimestamp) {
                             return;
                         }
@@ -126,7 +129,7 @@ const Storage = {
 
     exportBundle() {
         const bundle = {
-            version: '2.0',
+            version: '3.5',
             syncedAt: new Date().toISOString(),
             data: {}
         };
@@ -143,6 +146,9 @@ const Storage = {
                 localStorage.setItem(this.PREFIX + key, JSON.stringify(bundle.data[key]));
             }
         });
+        try {
+            localStorage.setItem('budget_emergency_backup', JSON.stringify(bundle));
+        } catch (e) {}
         return true;
     },
 
@@ -150,20 +156,38 @@ const Storage = {
 
     autoSyncTimer: null,
     autoSyncBackground() {
+        if (!this.isCloudReady) {
+            return;
+        }
         if (this.autoSyncTimer) clearTimeout(this.autoSyncTimer);
         this.autoSyncTimer = setTimeout(() => {
             this.pushToCloud(true);
-        }, 800);
+        }, 1000);
     },
 
-    /* --- Облачный обмен с Supabase (Push & Pull) --- */
+    /* --- Облачный обмен с Supabase (Push & Pull) с защитой от затирания --- */
 
     async pushToCloud(silent = false) {
+        if (this.isPushing) return { success: false };
+        this.isPushing = true;
+
         try {
             const bundle = this.exportBundle();
+            
+            const localTxCount = (bundle.data.journal_transactions || []).length +
+                                 (bundle.data.shared_transactions || []).length +
+                                 (bundle.data.currency_transactions || []).length;
+            
+            const lastKnownCloudTxCount = parseInt(localStorage.getItem('budget_known_cloud_tx_count') || '0', 10);
+
+            if (localTxCount === 0 && lastKnownCloudTxCount > 0 && !silent) {
+                console.error('CRITICAL: Blocked attempt to overwrite non-empty cloud database with 0 transactions!');
+                this.showSyncToast('⚠️ Заблокирована попытка затереть облако');
+                return { success: false, reason: 'anti_wipe_blocked' };
+            }
+
             this.lastPushedTimestamp = bundle.syncedAt;
 
-            // 1. Попытка через Supabase JS Client
             if (this.client) {
                 const { error } = await this.client
                     .from(this.TABLE_NAME)
@@ -175,12 +199,13 @@ const Storage = {
 
                 if (!error) {
                     localStorage.setItem('budget_last_synced_at', bundle.syncedAt);
+                    localStorage.setItem('budget_known_cloud_tx_count', String(localTxCount));
                     this.updateCloudStatusUI('🟢 Онлайн');
+                    if (!silent) this.showSyncToast('Данные успешно выгружены в облако ☁️');
                     return { success: true };
                 }
             }
 
-            // 2. Запасной прямой REST-запрос через fetch
             const response = await fetch(`${this.SUPABASE_URL}/rest/v1/${this.TABLE_NAME}`, {
                 method: 'POST',
                 headers: {
@@ -198,21 +223,27 @@ const Storage = {
 
             if (response.ok || response.status === 201 || response.status === 200) {
                 localStorage.setItem('budget_last_synced_at', bundle.syncedAt);
+                localStorage.setItem('budget_known_cloud_tx_count', String(localTxCount));
                 this.updateCloudStatusUI('🟢 Онлайн');
+                if (!silent) this.showSyncToast('Данные успешно выгружены в облако ☁️');
                 return { success: true };
             }
         } catch (err) {
             console.warn('Supabase push error:', err);
             this.updateCloudStatusUI('🟡 Офлайн');
+        } finally {
+            this.isPushing = false;
         }
         return { success: false };
     },
 
     async pullFromCloud(silent = false) {
+        if (this.isPulling) return { success: false };
+        this.isPulling = true;
+
         try {
             let bundle = null;
 
-            // 1. Попытка через Supabase JS Client
             if (this.client) {
                 const { data, error } = await this.client
                     .from(this.TABLE_NAME)
@@ -225,7 +256,6 @@ const Storage = {
                 }
             }
 
-            // 2. Запасной прямой REST-запрос
             if (!bundle) {
                 const response = await fetch(`${this.SUPABASE_URL}/rest/v1/${this.TABLE_NAME}?id=eq.${this.ROW_ID}&select=payload,updated_at`, {
                     headers: {
@@ -242,31 +272,50 @@ const Storage = {
             }
 
             if (bundle && bundle.data) {
-                // Проверяем, есть ли данные в облаке
-                const hasCloudData = bundle.data.accounts && bundle.data.accounts.length > 0;
-                const hasLocalData = this.get('accounts') && this.get('accounts').length > 0;
+                const cloudTxCount = (bundle.data.journal_transactions || []).length +
+                                     (bundle.data.shared_transactions || []).length +
+                                     (bundle.data.currency_transactions || []).length;
+                
+                const hasCloudData = cloudTxCount > 0 || (bundle.data.accounts && bundle.data.accounts.length > 0);
 
-                if (!hasCloudData && hasLocalData) {
-                    // В облаке пусто, а локально есть данные — выгружаем в облако
-                    await this.pushToCloud(true);
-                } else if (hasCloudData) {
+                if (hasCloudData) {
                     this.importBundle(bundle, true);
                     localStorage.setItem('budget_last_synced_at', bundle.syncedAt || new Date().toISOString());
+                    localStorage.setItem('budget_known_cloud_tx_count', String(cloudTxCount));
+                    
                     if (typeof App !== 'undefined' && App.renderPage) {
                         App.renderPage();
                     }
+                    if (!silent) this.showSyncToast('Данные успешно загружены из облака ☁️');
                 }
+
+                this.isCloudReady = true;
                 this.updateCloudStatusUI('🟢 Онлайн');
                 return { success: true };
             } else {
-                // Записи ещё нет — пушим текущие локальные данные
-                await this.pushToCloud(true);
+                this.isCloudReady = true;
+                const localBundle = this.exportBundle();
+                const localTxCount = (localBundle.data.journal_transactions || []).length;
+                if (localTxCount > 0) {
+                    await this.pushToCloud(true);
+                }
                 this.updateCloudStatusUI('🟢 Онлайн');
                 return { success: true };
             }
         } catch (err) {
             console.warn('Supabase pull error:', err);
             this.updateCloudStatusUI('🟡 Офлайн');
+            
+            const emergency = localStorage.getItem('budget_emergency_backup');
+            if (emergency && !this.get('accounts')) {
+                try {
+                    this.importBundle(JSON.parse(emergency), true);
+                    console.log('Restored from local emergency snapshot');
+                } catch (e) {}
+            }
+            this.isCloudReady = true;
+        } finally {
+            this.isPulling = false;
         }
         return { success: false };
     },
@@ -278,7 +327,10 @@ const Storage = {
         }
     },
 
-    showSyncToast(message) {
+    /* --- Всплывающее уведомление (Toast) --- */
+
+    showSyncToast(msg, duration = 3000) {
+        if (typeof document === 'undefined') return;
         let toast = document.getElementById('sync-toast');
         if (!toast) {
             toast = document.createElement('div');
@@ -286,182 +338,156 @@ const Storage = {
             toast.className = 'sync-toast';
             document.body.appendChild(toast);
         }
-        toast.innerHTML = message;
+        toast.textContent = msg;
         toast.classList.add('visible');
-        setTimeout(() => {
-            toast.classList.remove('visible');
-        }, 2500);
+        setTimeout(() => toast.classList.remove('visible'), duration);
     },
 
-    /* --- Текстовый код синхронизации (Запасной вариант) --- */
-
-    exportCodeString() {
-        const bundle = this.exportBundle();
-        const jsonStr = JSON.stringify(bundle);
-        return 'BDGT_' + btoa(unescape(encodeURIComponent(jsonStr)));
-    },
-
-    importCodeString(codeStr) {
-        if (!codeStr) return false;
-        try {
-            let cleanStr = codeStr.trim();
-            if (cleanStr.startsWith('BDGT_')) cleanStr = cleanStr.slice(5);
-            const jsonStr = decodeURIComponent(escape(atob(cleanStr)));
-            const bundle = JSON.parse(jsonStr);
-            const res = this.importBundle(bundle);
-            if (res) this.pushToCloud(true);
-            return res;
-        } catch (e) {
-            console.error('Import code error:', e);
-            return false;
-        }
-    },
-
-    /* --- Файловый Резервный Архив (.json) --- */
-
-    downloadBackupFile() {
-        const bundle = this.exportBundle();
-        const dateStr = new Date().toISOString().slice(0, 10);
-        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(bundle, null, 2));
-        const dlAnchor = document.createElement('a');
-        dlAnchor.setAttribute("href", dataStr);
-        dlAnchor.setAttribute("download", `budget_backup_${dateStr}.json`);
-        document.body.appendChild(dlAnchor);
-        dlAnchor.click();
-        dlAnchor.remove();
-    },
-
-    restoreFromBackupFile(fileInputEl) {
-        const file = fileInputEl.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            try {
-                const bundle = JSON.parse(e.target.result);
-                if (this.importBundle(bundle)) {
-                    this.pushToCloud(true);
-                    alert('✅ Данные успешно восстановлены из файла и сохранены в облако!');
-                    if (typeof App !== 'undefined' && App.renderPage) App.renderPage();
-                } else {
-                    alert('❌ Ошибка формата файла!');
-                }
-            } catch (err) {
-                alert('❌ Ошибка чтения файла: ' + err.message);
-            }
-        };
-        reader.readAsText(file);
-    },
-
-    /* --- Модальное окно синхронизации --- */
+    /* --- Модальное окно управления синхронизацией --- */
 
     showSyncModal() {
-        const lastSync = localStorage.getItem('budget_last_synced_at');
-        const lastSyncText = lastSync ? new Date(lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'нет';
+        const lastSync = localStorage.getItem('budget_last_synced_at') 
+            ? new Date(localStorage.getItem('budget_last_synced_at')).toLocaleString('ru-RU')
+            : 'Никогда';
 
-        App.showModal('☁️ Облачная база данных (Supabase)', `
-            <div style="margin-bottom: 20px;">
-                <div id="sync-notice-banner" style="display:none; padding:12px; border-radius:var(--radius); margin-bottom:16px; font-weight:600; font-size:13px;"></div>
+        const jsonExport = JSON.stringify(this.exportBundle(), null, 2);
 
-                <!-- Статус базы данных -->
-                <div style="background: var(--bg-card); padding: 14px; border-radius: var(--radius); border: 1px solid var(--accent-start); margin-bottom: 16px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                        <span style="font-size: 13px; font-weight:700; color:var(--text-primary);">Статус подключения:</span>
-                        <span style="font-size: 12px; font-weight:600; color:var(--color-success);">🟢 База данных активна</span>
+        App.showModal('☁️ Облачная синхронизация (Supabase Realtime)', `
+            <div style="margin-bottom: 16px;">
+                <div style="background: rgba(46, 213, 115, 0.1); border: 1px solid rgba(46, 213, 115, 0.3); border-radius: var(--radius); padding: 12px; margin-bottom: 16px;">
+                    <div style="font-weight: 700; color: var(--color-success); margin-bottom: 4px; display:flex; align-items:center; gap:6px;">
+                        <span>🟢</span>
+                        <span>Автоматическая Realtime-синхронизация активна</span>
                     </div>
-                    <div style="font-size: 11px; color: var(--text-muted); line-height: 1.5; margin-bottom: 12px;">
-                        Все изменения (расходы, взносы, валюты) мгновенно синхронизируются в реальном времени между всеми устройствами семьи.
-                    </div>
-                    <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 12px;">
-                        Последняя синхронизация: <strong>${lastSyncText}</strong>
-                    </div>
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
-                        <button class="btn btn-primary btn-sm" id="btn-cloud-push" style="justify-content:center;">📤 Отправить в базу</button>
-                        <button class="btn btn-secondary btn-sm" id="btn-cloud-pull" style="justify-content:center;">📥 Загрузить из базы</button>
+                    <div style="font-size: 12px; color: var(--text-secondary);">
+                        Любые изменения на компьютере, телефоне или планшете мгновенно передаются на все устройства. Встроенная защита Anti-Wipe предотвращает потерю данных при открытии на чистых устройствах.
                     </div>
                 </div>
 
-                <!-- Резервные копии -->
-                <div style="background: var(--bg-card); padding: 14px; border-radius: var(--radius); border: 1px solid var(--border-subtle); margin-bottom: 16px;">
-                    <div style="font-size: 12px; font-weight:600; margin-bottom: 8px;">💾 Резервная копия на диске (.json):</div>
-                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                        <button class="btn btn-secondary btn-sm" id="btn-download-json">Скачать .json файл</button>
-                        <label class="btn btn-secondary btn-sm" style="cursor:pointer; margin:0;">
-                            Загрузить .json файл
-                            <input type="file" id="input-restore-json" accept=".json" style="display:none;">
-                        </label>
-                    </div>
+                <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">
+                    Последняя синхронизация: <strong style="color: var(--text-primary);">${lastSync}</strong>
                 </div>
 
-                <!-- Запасной перенос кодом -->
-                <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
-                    <div style="font-size: 12px; font-weight:600; margin-bottom: 6px;">📋 Перенос через код (offline):</div>
-                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                        <button class="btn btn-secondary btn-sm" id="btn-copy-code-str">Скопировать код</button>
-                        <button class="btn btn-secondary btn-sm" id="btn-paste-code-str">Вставить код</button>
+                <div style="display: flex; gap: 10px; margin-bottom: 16px;">
+                    <button type="button" class="btn btn-primary btn-block" id="btn-modal-push-cloud">
+                        ⬆️ Выгрузить в облако
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-block" id="btn-modal-pull-cloud">
+                        ⬇️ Загрузить из облака
+                    </button>
+                </div>
+
+                <div style="margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 16px;">
+                    <label class="form-label">Автономный локальный файл (без облака):</label>
+                    <div style="display:flex; gap:10px; margin-bottom:12px;">
+                        <button type="button" class="btn btn-secondary btn-block" id="btn-download-backup-file">
+                            📥 Скачать файл на диск (.json)
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-block" id="btn-upload-backup-file">
+                            📤 Загрузить файл с диска
+                        </button>
+                        <input type="file" id="input-backup-file" accept=".json" style="display:none;">
                     </div>
+
+                    <details style="margin-top: 8px;">
+                        <summary style="font-size: 12px; color: var(--text-muted); cursor: pointer; user-select: none;">Показать текстовый JSON-код</summary>
+                        <div style="margin-top: 8px;">
+                            <textarea id="sync-json-area" class="form-input" style="font-family: monospace; font-size: 11px; height: 80px; resize: vertical;" readonly>${jsonExport}</textarea>
+                            <div style="display:flex; gap:8px; margin-top:8px;">
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-backup-json">📋 Скопировать</button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-import-custom-json">📥 Восстановить из текста</button>
+                            </div>
+                        </div>
+                    </details>
                 </div>
             </div>
-
             <div class="form-actions">
                 <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Закрыть</button>
             </div>
         `);
 
-        const banner = document.getElementById('sync-notice-banner');
-        const showNotice = (msg, isSuccess = true) => {
-            if (!banner) return;
-            banner.style.display = 'block';
-            banner.style.background = isSuccess ? 'rgba(46, 213, 115, 0.15)' : 'rgba(255, 71, 87, 0.15)';
-            banner.style.border = isSuccess ? '1px solid var(--color-success)' : '1px solid var(--color-danger)';
-            banner.style.color = isSuccess ? 'var(--color-success)' : 'var(--color-danger)';
-            banner.innerHTML = msg;
-        };
+        document.getElementById('btn-modal-push-cloud')?.addEventListener('click', async () => {
+            await this.pushToCloud(false);
+            App.closeModal();
+        });
 
-        document.getElementById('btn-cloud-push')?.addEventListener('click', async () => {
-            showNotice('⏳ Отправка данных в Supabase...');
-            const res = await this.pushToCloud(false);
-            if (res.success) {
-                showNotice('✅ Данные успешно сохранены в облачную базу данных!');
-            } else {
-                showNotice('❌ Ошибка отправки в базу. Проверьте интернет-соединение.', false);
+        document.getElementById('btn-modal-pull-cloud')?.addEventListener('click', async () => {
+            await this.pullFromCloud(false);
+            App.closeModal();
+        });
+
+        // 1-Click Скачать файл бэкапа на устройство
+        document.getElementById('btn-download-backup-file')?.addEventListener('click', () => {
+            const bundle = this.exportBundle();
+            const dateStr = new Date().toISOString().slice(0, 10);
+            const fileName = `budget_backup_${dateStr}.json`;
+            const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            this.showSyncToast(`Файл ${fileName} сохранён 📥`);
+        });
+
+        // 1-Click Загрузить файл бэкапа с устройства
+        const fileInput = document.getElementById('input-backup-file');
+        document.getElementById('btn-upload-backup-file')?.addEventListener('click', () => {
+            fileInput?.click();
+        });
+
+        fileInput?.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const parsed = JSON.parse(event.target.result);
+                    if (this.importBundle(parsed)) {
+                        this.pushToCloud(true);
+                        if (typeof App !== 'undefined' && App.renderPage) {
+                            App.renderPage();
+                        }
+                        this.showSyncToast('Данные успешно восстановлены из файла! 🚀');
+                        App.closeModal();
+                    } else {
+                        alert('Ошибка: неверный формат файла резервной копии');
+                    }
+                } catch (err) {
+                    alert('Ошибка чтения файла: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        document.getElementById('btn-copy-backup-json')?.addEventListener('click', () => {
+            const area = document.getElementById('sync-json-area');
+            if (area) {
+                area.select();
+                navigator.clipboard.writeText(area.value);
+                this.showSyncToast('Резервная копия скопирована в буфер 📋');
             }
         });
 
-        document.getElementById('btn-cloud-pull')?.addEventListener('click', async () => {
-            showNotice('⏳ Загрузка данных из Supabase...');
-            const res = await this.pullFromCloud(false);
-            if (res.success) {
-                showNotice('✅ Данные успешно получены и применены!');
-            } else {
-                showNotice('❌ Не удалось получить данные из базы.', false);
-            }
-        });
-
-        document.getElementById('btn-download-json')?.addEventListener('click', () => {
-            this.downloadBackupFile();
-        });
-
-        document.getElementById('input-restore-json')?.addEventListener('change', (e) => {
-            this.restoreFromBackupFile(e.target);
-        });
-
-        document.getElementById('btn-copy-code-str')?.addEventListener('click', () => {
-            const code = this.exportCodeString();
-            navigator.clipboard.writeText(code).then(() => {
-                showNotice('📋 Код скопирован в буфер обмена!');
-            }).catch(() => {
-                prompt('Скопируйте этот код:', code);
-            });
-        });
-
-        document.getElementById('btn-paste-code-str')?.addEventListener('click', () => {
-            const code = prompt('Вставьте скопированный код данных (BDGT_...):');
-            if (code) {
-                if (this.importCodeString(code)) {
-                    showNotice('✅ Данные успешно импортированы и сохранены в облаке!');
-                    if (typeof App !== 'undefined' && App.renderPage) App.renderPage();
-                } else {
-                    showNotice('❌ Неверный код данных.', false);
+        document.getElementById('btn-import-custom-json')?.addEventListener('click', () => {
+            const jsonStr = prompt('Вставьте JSON-строку резервной копии:');
+            if (jsonStr) {
+                try {
+                    const parsed = JSON.parse(jsonStr);
+                    if (this.importBundle(parsed)) {
+                        this.pushToCloud(true);
+                        App.renderPage();
+                        alert('Данные успешно восстановлены и синхронизированы с облаком!');
+                        App.closeModal();
+                    } else {
+                        alert('Ошибка: неверный формат данных JSON');
+                    }
+                } catch (e) {
+                    alert('Ошибка парсинга JSON: ' + e.message);
                 }
             }
         });
