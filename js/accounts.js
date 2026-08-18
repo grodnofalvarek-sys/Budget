@@ -90,11 +90,23 @@ const Accounts = {
         }, 0);
     },
 
-    getBalance(accId) {
+    getDepositedPrincipal(accId) {
         const acc = this.getById(accId);
         if (!acc) return 0;
         const initBal = acc.initialBalance !== undefined ? acc.initialBalance : (acc.balance || 0);
         return initBal + this.getJournalDeltaForAccount(accId) + this.getTransferDeltaForAccount(accId) + this.getSharedDeltaForAccount(accId) + this.getCurrencyDeltaForAccount(accId);
+    },
+
+    getBalance(accId) {
+        const acc = this.getById(accId);
+        if (!acc) return 0;
+        const deposited = this.getDepositedPrincipal(accId);
+        const yieldRate = parseFloat(acc.yieldRate) || 0;
+        if (yieldRate > 0) {
+            const accruedYield = deposited * (yieldRate / 100);
+            return deposited + accruedYield;
+        }
+        return deposited;
     },
 
     getTotalBalance() {
@@ -107,6 +119,7 @@ const Accounts = {
             id: generateId(),
             name: data.name,
             initialBalance: parseFloat(data.initialBalance) || 0,
+            yieldRate: parseFloat(data.yieldRate) || 0,
             currency: 'EUR',
             isVisible: true,
             isDefault: list.length === 0
@@ -119,6 +132,8 @@ const Accounts = {
         const acc = list.find(a => a.id === id);
         if (acc) {
             acc.name = data.name;
+            if (data.initialBalance !== undefined) acc.initialBalance = parseFloat(data.initialBalance) || 0;
+            if (data.yieldRate !== undefined) acc.yieldRate = parseFloat(data.yieldRate) || 0;
             this.save(list);
         }
     },
@@ -224,6 +239,10 @@ const Accounts = {
             <div class="card-grid">
                 ${accounts.map(a => {
                     const currentBalance = this.getBalance(a.id);
+                    const deposited = this.getDepositedPrincipal(a.id);
+                    const yieldRate = parseFloat(a.yieldRate) || 0;
+                    const accruedYield = yieldRate > 0 ? (deposited * (yieldRate / 100)) : 0;
+
                     return `
                     <div class="card ${a.isVisible ? '' : 'card-dimmed'}">
                         <div class="card-row">
@@ -234,13 +253,20 @@ const Accounts = {
                             </label>
                         </div>
                         <div class="card-value">${formatMoney(currentBalance)}</div>
+                        ${yieldRate > 0 ? `
+                        <div style="font-size: 11px; color: var(--color-success); margin-top: -6px; margin-bottom: 10px; font-weight: 500;">
+                            Внесено: ${formatMoney(deposited)} • Доход (+${yieldRate}%): +${formatMoney(accruedYield)}
+                        </div>` : ''}
                         <div class="card-row">
-                            <span class="badge">${a.currency}</span>
+                            <div style="display:flex; gap:6px; align-items:center;">
+                                <span class="badge">${a.currency}</span>
+                                ${yieldRate > 0 ? `<span class="badge" style="background:rgba(46,213,115,0.15); color:var(--color-success); border:1px solid rgba(46,213,115,0.3);">📈 +${yieldRate}%</span>` : ''}
+                            </div>
                             <div class="card-actions">
                                 ${a.isDefault
                                     ? '<span class="badge badge-accent">По умолчанию</span>'
                                     : `<button class="btn btn-set-default" data-action="set-default" data-id="${a.id}">По умолчанию</button>`}
-                                <button class="btn-icon" data-action="edit" data-id="${a.id}" title="Редактировать название">✏️</button>
+                                <button class="btn-icon" data-action="edit" data-id="${a.id}" title="Редактировать счёт">✏️</button>
                                 <button class="btn-icon" data-action="delete" data-id="${a.id}" title="Удалить счёт">🗑️</button>
                             </div>
                         </div>
@@ -290,51 +316,57 @@ const Accounts = {
         });
 
         const content = document.getElementById('content');
+        if (content) {
+            /* Одиночный обработчик переключения видимости (без накопления слушателей) */
+            content.onchange = (e) => {
+                if (e.target && e.target.dataset.action === 'toggle-vis') {
+                    this.toggleVisibility(e.target.dataset.id);
+                    App.renderPage();
+                }
+            };
 
-        /* Toggle видимости — checkbox */
-        content.addEventListener('change', (e) => {
-            if (e.target.dataset.action === 'toggle-vis') {
-                this.toggleVisibility(e.target.dataset.id);
-                App.renderPage();
-            }
-        });
+            /* Одиночный обработчик кнопок действий */
+            content.onclick = (e) => {
+                const btn = e.target.closest('[data-action]');
+                if (!btn || btn.tagName === 'INPUT') return;
+                const { action, id } = btn.dataset;
 
-        /* Кнопки действий */
-        content.addEventListener('click', (e) => {
-            const btn = e.target.closest('[data-action]');
-            if (!btn || btn.tagName === 'INPUT') return;
-            const { action, id } = btn.dataset;
-
-            switch (action) {
-                case 'set-default':     this.setDefault(id); App.renderPage(); break;
-                case 'edit':            this.showModal(id); break;
-                case 'delete':
-                    const acc = this.getById(id);
-                    App.showConfirm(`Удалить счёт «${acc.name}»?`, () => { this.remove(id); App.renderPage(); });
-                    break;
-                case 'edit-transfer':   this.showTransferModal(id); break;
-                case 'delete-transfer':
-                    App.showConfirm('Удалить запись о переводе?', () => { this.removeTransfer(id); App.renderPage(); });
-                    break;
-            }
-        });
+                switch (action) {
+                    case 'set-default':     this.setDefault(id); App.renderPage(); break;
+                    case 'edit':            this.showModal(id); break;
+                    case 'delete':
+                        const acc = this.getById(id);
+                        App.showConfirm(`Удалить счёт «${acc.name}»?`, () => { this.remove(id); App.renderPage(); });
+                        break;
+                    case 'edit-transfer':   this.showTransferModal(id); break;
+                    case 'delete-transfer':
+                        App.showConfirm('Удалить запись о переводе?', () => { this.removeTransfer(id); App.renderPage(); });
+                        break;
+                }
+            };
+        }
     },
 
     showModal(editId = null) {
         const acc = editId ? this.getById(editId) : null;
         const isEdit = !!editId;
 
-        App.showModal(isEdit ? 'Редактировать название счёта' : 'Новый счёт', `
+        App.showModal(isEdit ? 'Редактировать счёт' : 'Новый счёт', `
             <form id="modal-form">
                 <div class="form-group">
                     <label class="form-label">Название счёта</label>
                     <input type="text" class="form-input" name="name" value="${acc?.name || ''}" placeholder="например, Карта Visa" required autocomplete="off">
                 </div>
-                ${!isEdit ? `
                 <div class="form-group">
                     <label class="form-label">Начальный баланс (€)</label>
-                    <input type="number" class="form-input" name="initialBalance" step="0.01" value="0.00">
-                </div>` : ''}
+                    <input type="number" class="form-input" name="initialBalance" step="0.01" value="${acc && acc.initialBalance !== undefined ? acc.initialBalance : (acc?.balance !== undefined ? acc.balance : '0.00')}">
+                    <div class="form-hint" style="font-size:11px; color:var(--text-muted); margin-top:2px;">Сумма средств на счёте на начало ведения учёта</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Процентная ставка / доходность (%):</label>
+                    <input type="number" class="form-input" name="yieldRate" step="0.01" placeholder="0.00 (или например 8.17)" value="${acc && acc.yieldRate !== undefined ? acc.yieldRate : ''}">
+                    <div class="form-hint" style="font-size:11px; color:var(--text-muted); margin-top:2px;">Для накопительных счетов (начисляется на сумму всех внесённых средств)</div>
+                </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Отмена</button>
                     <button type="submit" class="btn btn-primary">Сохранить</button>
@@ -346,12 +378,13 @@ const Accounts = {
             e.preventDefault();
             const name = e.target.name.value.trim();
             if (!name) return;
+            const initialBalance = parseFloat(e.target.initialBalance?.value) || 0;
+            const yieldRate = parseFloat(e.target.yieldRate?.value) || 0;
 
             if (isEdit) {
-                this.update(editId, { name });
+                this.update(editId, { name, initialBalance, yieldRate });
             } else {
-                const initialBalance = parseFloat(e.target.initialBalance?.value) || 0;
-                this.add({ name, initialBalance });
+                this.add({ name, initialBalance, yieldRate });
             }
             App.closeModal();
             App.renderPage();

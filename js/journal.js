@@ -188,6 +188,31 @@ const Journal = {
         const actualMandatory = monthTx.filter(t => t.type === 'expense' && t.expenseType === 'mandatory').reduce((s, t) => s + t.amount, 0);
         const actualCurrent = monthTx.filter(t => t.type === 'expense' && t.expenseType === 'current').reduce((s, t) => s + t.amount, 0);
 
+        // Переводы на сторонние счета (Общий счёт + Валюты только с личных счетов)
+        let actualSharedTransfers = 0;
+        if (typeof Shared !== 'undefined' && Shared.getTransactions) {
+            const sharedTxs = Shared.getTransactions() || [];
+            actualSharedTransfers = sharedTxs
+                .filter(t => t && t.type === 'my_deposit' && t.date && t.date.startsWith(monthStr))
+                .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+        }
+
+        let actualCurrencyTransfers = 0;
+        if (typeof Currency !== 'undefined' && Currency.getTransactions) {
+            const currTxs = Currency.getTransactions() || [];
+            actualCurrencyTransfers = currTxs
+                .filter(t => t && t.type === 'deposit' && t.date && t.date.startsWith(monthStr))
+                .filter(t => t.sourceAccountId && t.sourceAccountId !== 'shared')
+                .reduce((s, t) => s + (parseFloat(t.spentEur) || 0), 0);
+        }
+
+        const actualTransfers = actualSharedTransfers + actualCurrencyTransfers;
+        const totalMonthExpenses = actualMandatory + actualCurrent + actualTransfers;
+
+        const mandPercent = totalMonthExpenses > 0 ? Math.round((actualMandatory / totalMonthExpenses) * 100) : 0;
+        const currPercent = totalMonthExpenses > 0 ? Math.round((actualCurrent / totalMonthExpenses) * 100) : 0;
+        const transfPercent = totalMonthExpenses > 0 ? Math.round((actualTransfers / totalMonthExpenses) * 100) : 0;
+
         // Дата для карточки "Факт за день" (выбранный день или сегодня)
         const todayStr = new Date().toISOString().slice(0, 10);
         const displayDay = this.selectedDate || (todayStr.startsWith(monthStr) ? todayStr : `${monthStr}-01`);
@@ -211,12 +236,32 @@ const Journal = {
             daysPassed = 1;
         }
 
-        // Сумма всех текущих расходов с начала месяца до выбранной/текущей даты
+        // Сумма текущих расходов и переводов на сторонние счета с начала месяца до выбранной/текущей даты
         const currentExpensesSoFar = monthTx
             .filter(t => t.type === 'expense' && t.expenseType === 'current' && (!this.selectedDate || t.date <= this.selectedDate))
             .reduce((s, t) => s + t.amount, 0);
 
-        const averageDailyExpense = currentExpensesSoFar / daysPassed;
+        let sharedSoFar = 0;
+        if (typeof Shared !== 'undefined' && Shared.getTransactions) {
+            const sharedTxs = Shared.getTransactions() || [];
+            sharedSoFar = sharedTxs
+                .filter(t => t && t.type === 'my_deposit' && t.date && t.date.startsWith(monthStr) && (!this.selectedDate || t.date <= this.selectedDate))
+                .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+        }
+
+        let currencySoFar = 0;
+        if (typeof Currency !== 'undefined' && Currency.getTransactions) {
+            const currTxs = Currency.getTransactions() || [];
+            currencySoFar = currTxs
+                .filter(t => t && t.type === 'deposit' && t.date && t.date.startsWith(monthStr) && (!this.selectedDate || t.date <= this.selectedDate))
+                .filter(t => t.sourceAccountId && t.sourceAccountId !== 'shared')
+                .reduce((s, t) => s + (parseFloat(t.spentEur) || 0), 0);
+        }
+
+        const transfersSoFar = sharedSoFar + currencySoFar;
+        const variableExpensesSoFar = currentExpensesSoFar + transfersSoFar;
+
+        const averageDailyExpense = variableExpensesSoFar / daysPassed;
         const isOverBudget = dailyPlan > 0 && averageDailyExpense > dailyPlan;
         const diffDaily = Math.abs(averageDailyExpense - dailyPlan);
 
@@ -263,13 +308,14 @@ const Journal = {
 
                 <div class="card ${isOverBudget ? 'card-danger' : 'card-success'}">
                     <div class="card-title">СРЕДНИЙ РАСХОД В ДЕНЬ</div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: -4px; margin-bottom: 4px;">(Текущие + Переводы)</div>
                     <div class="card-value ${isOverBudget ? 'negative' : 'positive'}">${formatMoney(averageDailyExpense)}</div>
                     <div class="card-hint">
                         ${isOverBudget 
                             ? `<span class="badge badge-danger">Перерасход на ${formatMoney(diffDaily)}/день</span>` 
                             : `<span class="badge badge-success">В норме (остаток ${formatMoney(dailyPlan - averageDailyExpense)})</span>`}
                         <div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">
-                            (${formatMoney(currentExpensesSoFar)} / ${daysPassed} дн.)
+                            (${formatMoney(variableExpensesSoFar)} / ${daysPassed} дн.)
                         </div>
                     </div>
                 </div>
@@ -278,8 +324,9 @@ const Journal = {
                     <div class="card-title">Итоги месяца (${monthStr})</div>
                     <div class="card-stats">
                         <div class="stat-item"><span class="stat-label">Доходы:</span> <span class="stat-val positive">+${formatMoney(actualIncome)}</span></div>
-                        <div class="stat-item"><span class="stat-label">Обязательные:</span> <span class="stat-val">${formatMoney(actualMandatory)}</span></div>
-                        <div class="stat-item"><span class="stat-label">Текущие:</span> <span class="stat-val">${formatMoney(actualCurrent)}</span></div>
+                        <div class="stat-item"><span class="stat-label">Обязательные:</span> <span class="stat-val">${formatMoney(actualMandatory)} <span style="font-size:11px; color:var(--text-muted); font-weight:normal;">(${mandPercent}%)</span></span></div>
+                        <div class="stat-item"><span class="stat-label">Текущие:</span> <span class="stat-val">${formatMoney(actualCurrent)} <span style="font-size:11px; color:var(--text-muted); font-weight:normal;">(${currPercent}%)</span></span></div>
+                        <div class="stat-item"><span class="stat-label">Переводы:</span> <span class="stat-val">${formatMoney(actualTransfers)} <span style="font-size:11px; color:var(--text-muted); font-weight:normal;">(${transfPercent}%)</span></span></div>
                     </div>
                 </div>
             </div>
