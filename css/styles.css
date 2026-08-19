@@ -1204,6 +1204,98 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
     padding-top: 10px;
 }
 
+/* ===========================================
+   Analytics & Print Styles
+   =========================================== */
+
+.chart-bar-group {
+    transition: transform var(--transition-fast);
+    cursor: pointer;
+}
+
+.chart-bar-group:hover rect {
+    opacity: 1 !important;
+    filter: brightness(1.2);
+}
+
+.report-preview-modal {
+    max-width: 900px !important;
+    width: 95% !important;
+}
+
+.analytics-table tfoot td {
+    padding: 12px 14px;
+    font-size: 13px;
+}
+
+@media print {
+    .sidebar,
+    .analytics-toolbar,
+    .header-actions,
+    .modal-overlay,
+    .btn,
+    .sidebar-nav {
+        display: none !important;
+    }
+
+    body {
+        background: #ffffff !important;
+        color: #111827 !important;
+        font-size: 12pt;
+    }
+
+    .main {
+        margin: 0 !important;
+        padding: 10px !important;
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    .card {
+        background: #ffffff !important;
+        border: 1px solid #e5e7eb !important;
+        color: #111827 !important;
+        box-shadow: none !important;
+        break-inside: avoid;
+        margin-bottom: 16px !important;
+    }
+
+    .card-title, .section-title {
+        color: #374151 !important;
+    }
+
+    .card-value {
+        color: #111827 !important;
+    }
+
+    .positive {
+        color: #059669 !important;
+    }
+
+    .negative {
+        color: #dc2626 !important;
+    }
+
+    .journal-table th {
+        background: #f3f4f6 !important;
+        color: #374151 !important;
+        border-bottom: 2px solid #d1d5db !important;
+    }
+
+    .journal-table td {
+        border-bottom: 1px solid #e5e7eb !important;
+        color: #1f2937 !important;
+    }
+
+    svg text {
+        fill: #4b5563 !important;
+    }
+
+    svg line {
+        stroke: #e5e7eb !important;
+    }
+}
+
 
 
 
