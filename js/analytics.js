@@ -177,6 +177,34 @@ const Analytics = {
 
         categoryStats.sort((a, b) => b.amount - a.amount);
 
+        // --- Статистика Общего счёта (Shared) за период ---
+        let sharedTxs = [];
+        if (typeof Shared !== 'undefined' && Shared.getTransactions) {
+            sharedTxs = (Shared.getTransactions() || []).filter(t => t && t.date && months.some(m => t.date.startsWith(m)));
+        }
+        const sharedCats = (typeof Shared !== 'undefined' && Shared.getCategories) ? (Shared.getCategories() || []) : [];
+
+        const sharedTotalExpenses = sharedTxs.filter(t => t.type === 'expense').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+        const sharedMyDeposits = sharedTxs.filter(t => t.type === 'my_deposit').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+        const sharedWifeDeposits = sharedTxs.filter(t => t.type === 'wife_deposit' || t.type === 'partner_deposit').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+
+        const sharedCatMap = {};
+        sharedTxs.filter(t => t.type === 'expense').forEach(t => {
+            sharedCatMap[t.categoryId] = (sharedCatMap[t.categoryId] || 0) + (parseFloat(t.amount) || 0);
+        });
+
+        const sharedCategoryStats = [];
+        sharedCats.forEach(c => {
+            const amount = sharedCatMap[c.id] || 0;
+            if (amount > 0) sharedCategoryStats.push({ id: c.id, name: c.name, icon: '🤝', amount });
+        });
+        Object.keys(sharedCatMap).forEach(catId => {
+            if (!sharedCats.some(c => c.id === catId) && sharedCatMap[catId] > 0) {
+                sharedCategoryStats.push({ id: catId, name: catId, icon: '🤝', amount: sharedCatMap[catId] });
+            }
+        });
+        sharedCategoryStats.sort((a, b) => b.amount - a.amount);
+
         return {
             months,
             monthlyStats,
@@ -187,7 +215,11 @@ const Analytics = {
             totalExpenses,
             totalSavings,
             avgSavingsRate,
-            categoryStats
+            categoryStats,
+            sharedTotalExpenses,
+            sharedMyDeposits,
+            sharedWifeDeposits,
+            sharedCategoryStats
         };
     },
 
@@ -264,10 +296,10 @@ const Analytics = {
                 </div>
             </div>
 
-            <!-- Графики: Сетка 2 колонки -->
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 24px; margin-bottom: 24px;">
+            <!-- Графики: Сбалансированная сетка 2x2 (4 карточки) -->
+            <div class="analytics-charts-grid" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 24px;">
                 
-                <!-- График 1: Доходы vs Расходы по месяцам -->
+                <!-- Ряд 1, Лево: Доходы vs Расходы по месяцам -->
                 <div class="card">
                     <div class="section-header" style="margin-bottom: 16px; padding: 0;">
                         <h3 class="section-title" style="font-size: 16px;">📊 Доходы vs Расходы по месяцам</h3>
@@ -281,10 +313,10 @@ const Analytics = {
                     </div>
                 </div>
 
-                <!-- График 2: Структура расходов (Донат-диаграмма) -->
+                <!-- Ряд 1, Право: Структура личных расходов (Донат ТОП-10) -->
                 <div class="card">
                     <div class="section-header" style="margin-bottom: 16px; padding: 0;">
-                        <h3 class="section-title" style="font-size: 16px;">🍩 Структура расходов</h3>
+                        <h3 class="section-title" style="font-size: 16px;">🍩 Структура личных расходов</h3>
                         <div style="font-size:11px; color:var(--text-muted);">Всего: ${formatMoney(data.totalExpenses)}</div>
                     </div>
                     <div style="width:100%; min-height:220px; display:flex; align-items:center; justify-content:center;">
@@ -292,17 +324,28 @@ const Analytics = {
                     </div>
                 </div>
 
-            </div>
+                <!-- Ряд 2, Лево: Динамика роста капитала -->
+                <div class="card">
+                    <div class="section-header" style="margin-bottom: 16px; padding: 0;">
+                        <h3 class="section-title" style="font-size: 16px;">📈 Динамика роста капитала</h3>
+                        <div style="font-size:11px; color:var(--text-muted);">Все счета с пенсионной доходностью</div>
+                    </div>
+                    <div style="width:100%; min-height:220px; display:flex; align-items:center;">
+                        ${this.renderLineChart(data.monthlyStats)}
+                    </div>
+                </div>
 
-            <!-- График 3: Тренд роста капитала -->
-            <div class="card" style="margin-bottom: 24px;">
-                <div class="section-header" style="margin-bottom: 16px; padding: 0;">
-                    <h3 class="section-title" style="font-size: 16px;">📈 Динамика роста суммарного капитала</h3>
-                    <div style="font-size:11px; color:var(--text-muted);">Включая накопительный пенсионный счёт с доходностью</div>
+                <!-- Ряд 2, Право: Расходы Общего счёта (Донат ТОП-5 + взносы) -->
+                <div class="card">
+                    <div class="section-header" style="margin-bottom: 16px; padding: 0;">
+                        <h3 class="section-title" style="font-size: 16px;">🤝 Расходы Общего счёта</h3>
+                        <div style="font-size:11px; color:var(--text-muted);">Семейный бюджет: ${formatMoney(data.sharedTotalExpenses)}</div>
+                    </div>
+                    <div style="width:100%; min-height:220px; display:flex; align-items:center; justify-content:center;">
+                        ${this.renderSharedDonutChart(data.sharedCategoryStats, data.sharedTotalExpenses, data.sharedMyDeposits, data.sharedWifeDeposits)}
+                    </div>
                 </div>
-                <div style="width:100%; min-height:160px;">
-                    ${this.renderLineChart(data.monthlyStats)}
-                </div>
+
             </div>
 
             <!-- Сводная таблица «Месяц к месяцу» -->
@@ -421,18 +464,19 @@ const Analytics = {
 
         const colors = [
             '#f59e0b', '#3b82f6', '#10b981', '#ec4899', '#8b5cf6', 
-            '#06b6d4', '#f97316', '#64748b', '#eab308', '#a855f7'
+            '#06b6d4', '#f97316', '#14b8a6', '#e11d48', '#84cc16', 
+            '#6366f1', '#64748b'
         ];
 
         let accumulatedAngle = 0;
-        const size = 150;
-        const radius = 55;
+        const size = 220;
+        const radius = 80;
         const center = size / 2;
-        const strokeWidth = 22;
+        const strokeWidth = 28;
         const circumference = 2 * Math.PI * radius;
 
-        const topCategories = categoryStats.slice(0, 5);
-        const otherAmount = categoryStats.slice(5).reduce((s, c) => s + c.amount, 0);
+        const topCategories = categoryStats.slice(0, 10);
+        const otherAmount = categoryStats.slice(10).reduce((s, c) => s + c.amount, 0);
         if (otherAmount > 0) {
             topCategories.push({ id: 'other', name: 'Прочие категории', icon: '📦', amount: otherAmount });
         }
@@ -455,6 +499,7 @@ const Analytics = {
 
         return `
             <div style="display:flex; flex-wrap:wrap; align-items:center; gap:20px; justify-content:center; width:100%;">
+                <!-- Увеличенный SVG Донат (220px) -->
                 <div style="position:relative; width:${size}px; height:${size}px; flex-shrink:0;">
                     <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform: rotate(-90deg);">
                         <circle cx="${center}" cy="${center}" r="${radius}" fill="transparent" stroke="var(--bg-body)" stroke-width="${strokeWidth}" />
@@ -468,21 +513,127 @@ const Analytics = {
                         `).join('')}
                     </svg>
                     <div style="position:absolute; top:0; left:0; width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; pointer-events:none;">
-                        <span style="font-size:10px; color:var(--text-muted);">Всего</span>
-                        <span style="font-weight:700; font-size:12px;">${formatMoney(totalExpenses)}</span>
+                        <span style="font-size:11px; color:var(--text-muted);">Всего</span>
+                        <span style="font-weight:700; font-size:15px;">${formatMoney(totalExpenses)}</span>
                     </div>
                 </div>
 
-                <div style="display:flex; flex-direction:column; gap:6px; flex:1; min-width:160px;">
+                <!-- Компактная легенда ТОП-10 категорий -->
+                <div style="display:flex; flex-direction:column; gap:3px; flex:1; min-width:170px;">
                     ${segments.map(s => `
-                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px;">
-                            <span style="display:inline-flex; align-items:center; gap:6px;">
-                                <span style="width:8px; height:8px; border-radius:50%; background:${s.color}; flex-shrink:0;"></span>
-                                <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:120px;">${s.icon || ''} ${s.name}</span>
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:11.5px; padding:1px 0;">
+                            <span style="display:inline-flex; align-items:center; gap:5px; overflow:hidden;">
+                                <span style="width:7px; height:7px; border-radius:50%; background:${s.color}; flex-shrink:0;"></span>
+                                <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:130px;">${s.icon || ''} ${s.name}</span>
                             </span>
-                            <span style="font-weight:600; white-space:nowrap; margin-left:8px;">${formatMoney(s.amount)} <span style="color:var(--text-muted); font-size:10px; font-weight:normal;">(${s.percent}%)</span></span>
+                            <span style="font-weight:600; white-space:nowrap; margin-left:6px;">
+                                ${formatMoney(s.amount)} <span style="color:var(--text-muted); font-size:10px; font-weight:normal;">(${s.percent}%)</span>
+                            </span>
                         </div>
                     `).join('')}
+                </div>
+            </div>
+        `;
+    },
+
+    renderSharedDonutChart(sharedCategoryStats, sharedTotalExpenses, sharedMyDeposits, sharedWifeDeposits) {
+        const totalDeposited = (sharedMyDeposits || 0) + (sharedWifeDeposits || 0);
+        const mySharePercent = totalDeposited > 0 ? Math.round((sharedMyDeposits / totalDeposited) * 100) : (sharedMyDeposits > 0 ? 100 : 0);
+        const wifeSharePercent = totalDeposited > 0 ? (100 - mySharePercent) : (sharedWifeDeposits > 0 ? 100 : 0);
+
+        if (!sharedCategoryStats || sharedCategoryStats.length === 0 || sharedTotalExpenses <= 0) {
+            return `
+                <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:220px; text-align:center; color:var(--text-muted); width:100%;">
+                    <span style="font-size:32px; margin-bottom:8px; opacity:0.6;">🤝</span>
+                    <span style="font-size:13px; font-weight:500;">Расходов в Общем счёте за этот период нет</span>
+                    ${totalDeposited > 0 ? `
+                        <div style="font-size:11.5px; color:var(--text-secondary); margin-top:10px; padding:6px 14px; background:rgba(255,255,255,0.03); border-radius:var(--radius-sm);">
+                            Внесено всего: <strong class="positive">+${formatMoney(totalDeposited)}</strong> 
+                            <span style="color:var(--text-muted); font-size:11px;">(Я: +${formatMoney(sharedMyDeposits)} • Жена: +${formatMoney(sharedWifeDeposits)})</span>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        const colors = [
+            '#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#64748b'
+        ];
+
+        let accumulatedAngle = 0;
+        const size = 170;
+        const radius = 62;
+        const center = size / 2;
+        const strokeWidth = 22;
+        const circumference = 2 * Math.PI * radius;
+
+        const topCategories = sharedCategoryStats.slice(0, 5);
+        const otherAmount = sharedCategoryStats.slice(5).reduce((s, c) => s + c.amount, 0);
+        if (otherAmount > 0) {
+            topCategories.push({ id: 'other', name: 'Прочие категории', icon: '📦', amount: otherAmount });
+        }
+
+        const segments = topCategories.map((c, idx) => {
+            const ratio = c.amount / sharedTotalExpenses;
+            const strokeDasharray = `${(ratio * circumference).toFixed(2)} ${circumference.toFixed(2)}`;
+            const strokeDashoffset = (-accumulatedAngle * circumference).toFixed(2);
+            accumulatedAngle += ratio;
+            const color = colors[idx % colors.length];
+
+            return {
+                ...c,
+                color,
+                strokeDasharray,
+                strokeDashoffset,
+                percent: Math.round(ratio * 100) || (ratio > 0 ? '<1' : 0)
+            };
+        });
+
+        return `
+            <div style="display:flex; flex-direction:column; gap:14px; width:100%;">
+                <div style="display:flex; align-items:center; gap:16px; justify-content:space-between; width:100%;">
+                    <!-- SVG Донат Общего счёта (170px) -->
+                    <div style="position:relative; width:${size}px; height:${size}px; flex-shrink:0;">
+                        <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform: rotate(-90deg);">
+                            <circle cx="${center}" cy="${center}" r="${radius}" fill="transparent" stroke="var(--bg-body)" stroke-width="${strokeWidth}" />
+                            ${segments.map(s => `
+                                <circle cx="${center}" cy="${center}" r="${radius}" fill="transparent" 
+                                        stroke="${s.color}" stroke-width="${strokeWidth}"
+                                        stroke-dasharray="${s.strokeDasharray}" 
+                                        stroke-dashoffset="${s.strokeDashoffset}">
+                                    <title>${s.name}: ${formatMoney(s.amount)} (${s.percent}%)</title>
+                                </circle>
+                            `).join('')}
+                        </svg>
+                        <div style="position:absolute; top:0; left:0; width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; pointer-events:none;">
+                            <span style="font-size:10px; color:var(--text-muted);">Общий счёт</span>
+                            <span style="font-weight:700; font-size:13px;">${formatMoney(sharedTotalExpenses)}</span>
+                        </div>
+                    </div>
+
+                    <!-- Легенда ТОП-5 категорий Общего счёта -->
+                    <div style="display:flex; flex-direction:column; gap:4px; flex:1; min-width:160px;">
+                        ${segments.map(s => `
+                            <div style="display:flex; justify-content:space-between; align-items:center; font-size:11.5px; padding:1px 0;">
+                                <span style="display:inline-flex; align-items:center; gap:5px; overflow:hidden;">
+                                    <span style="width:7px; height:7px; border-radius:50%; background:${s.color}; flex-shrink:0;"></span>
+                                    <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:130px;">${s.icon || ''} ${s.name}</span>
+                                </span>
+                                <span style="font-weight:600; white-space:nowrap; margin-left:6px;">
+                                    ${formatMoney(s.amount)} <span style="color:var(--text-muted); font-size:10px; font-weight:normal;">(${s.percent}%)</span>
+                                </span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <!-- Нижняя строка соотношения взносов в Общий счёт -->
+                <div style="border-top:1px solid var(--border-subtle); padding-top:8px; display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--text-secondary); flex-wrap:wrap; gap:6px;">
+                    <span>Внесено всего: <strong class="positive">+${formatMoney(totalDeposited)}</strong></span>
+                    <span style="font-weight:600;">
+                        Я <span class="positive">+${formatMoney(sharedMyDeposits)}</span> <span style="color:var(--text-muted); font-weight:normal;">(${mySharePercent}%)</span> • 
+                        Жена <span class="positive">+${formatMoney(sharedWifeDeposits)}</span> <span style="color:var(--text-muted); font-weight:normal;">(${wifeSharePercent}%)</span>
+                    </span>
                 </div>
             </div>
         `;
@@ -495,7 +646,7 @@ const Analytics = {
         const range = maxVal - minVal || 1;
 
         const width = 460;
-        const height = 130;
+        const height = 150;
         const stepX = width / Math.max(1, monthlyStats.length - 1);
 
         const points = monthlyStats.map((m, idx) => {
@@ -1031,7 +1182,6 @@ const Analytics = {
         const todayIso = new Date().toISOString().slice(0, 10);
         const docFileName = `${todayIso} Финансовый отчёт`;
 
-        // Временно меняем заголовок главной страницы, чтобы PDF-принтер и браузер подставили нужное имя файла
         const originalTitle = document.title;
         document.title = docFileName;
 
