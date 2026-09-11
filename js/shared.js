@@ -168,9 +168,10 @@ const Shared = {
         const totalExpenses = this.getMonthlyExpenses(currentMonth);
 
         const rawTxs = this.getTransactions();
+        const monthTxs = rawTxs.filter(t => t.date && t.date.startsWith(currentMonth));
         
         // Хронологическая сортировка по возрастанию даты (от 1-го числа к концу месяца)
-        const sortedTxs = rawTxs.slice().sort((a, b) => {
+        const sortedTxs = monthTxs.slice().sort((a, b) => {
             if (a.date !== b.date) {
                 return (a.date || '').localeCompare(b.date || '');
             }
@@ -219,7 +220,7 @@ const Shared = {
 
             <!-- Таблица Журнала Общего счёта -->
             <div class="journal-table-container">
-                ${sortedTxs.length === 0 ? '<div class="list-empty">Операций по Общему счёту пока нет</div>' : `
+                ${sortedTxs.length === 0 ? '<div class="list-empty">Операций по Общему счёту в этом месяце пока нет</div>' : `
                 <table class="journal-table">
                     <thead>
                         <tr>

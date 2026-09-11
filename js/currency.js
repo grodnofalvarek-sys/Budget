@@ -233,7 +233,8 @@ const Currency = {
         const monthlyExpensesEur = avgRate > 0 ? (monthlyExpensesLocal / avgRate) : 0;
 
         const rawTxs = this.getTransactions().filter(t => t.currencyAccountId === activeAcc.id);
-        const sortedTxs = rawTxs.slice().sort((a, b) => {
+        const monthTxs = rawTxs.filter(t => t.date && t.date.startsWith(currentMonth));
+        const sortedTxs = monthTxs.slice().sort((a, b) => {
             if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
             return (a.createdAt || '').localeCompare(b.createdAt || '');
         });
@@ -289,7 +290,7 @@ const Currency = {
 
             <!-- Таблица Журнала по валютному счёту -->
             <div class="journal-table-container">
-                ${sortedTxs.length === 0 ? `<div class="list-empty">Операций по валютному счёту ${activeAcc.name} пока нет</div>` : `
+                ${sortedTxs.length === 0 ? `<div class="list-empty">Операций по валютному счёту ${activeAcc.name} в этом месяце пока нет</div>` : `
                 <table class="journal-table">
                     <thead>
                         <tr>
