@@ -366,6 +366,15 @@ const App = {
             ${body}
         `;
 
+        if (hasMonthBar) {
+            document.getElementById('btn-global-month-picker')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                DatePicker.openMonthPicker(e.currentTarget, this.currentMonth, (newMonth) => {
+                    this.setMonth(newMonth);
+                });
+            });
+        }
+
         if (page.module && page.module.afterRender) {
             page.module.afterRender();
         }
