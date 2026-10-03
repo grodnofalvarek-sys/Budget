@@ -262,7 +262,9 @@ const Journal = {
         const variableExpensesSoFar = currentExpensesSoFar + transfersSoFar;
 
         const averageDailyExpense = variableExpensesSoFar / daysPassed;
-        const isOverBudget = dailyPlan > 0 && averageDailyExpense > dailyPlan;
+        const plannedSoFar = dailyPlan * daysPassed;
+        const totalSaved = plannedSoFar - variableExpensesSoFar;
+        const isOverBudget = dailyPlan > 0 && variableExpensesSoFar > plannedSoFar;
         const diffDaily = Math.abs(averageDailyExpense - dailyPlan);
 
         // Фильтрация списка транзакций для таблицы
@@ -311,9 +313,11 @@ const Journal = {
                     <div style="font-size: 10px; color: var(--text-muted); margin-top: -4px; margin-bottom: 4px;">(Текущие + Переводы)</div>
                     <div class="card-value ${isOverBudget ? 'negative' : 'positive'}">${formatMoney(averageDailyExpense)}</div>
                     <div class="card-hint">
-                        ${isOverBudget 
-                            ? `<span class="badge badge-danger">Перерасход на ${formatMoney(diffDaily)}/день</span>` 
-                            : `<span class="badge badge-success">В норме (остаток ${formatMoney(dailyPlan - averageDailyExpense)})</span>`}
+                        ${dailyPlan <= 0 
+                            ? `<span class="badge" style="opacity:0.7">План не задан</span>` 
+                            : (isOverBudget 
+                                ? `<span class="badge badge-danger">Перерасход ${formatMoney(Math.abs(totalSaved))}</span>` 
+                                : `<span class="badge badge-success">В норме (сэкономлено ${formatMoney(totalSaved)})</span>`)}
                         <div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">
                             (${formatMoney(variableExpensesSoFar)} / ${daysPassed} дн.)
                         </div>
