@@ -13,8 +13,8 @@ const Toyota = {
             downPaymentTotal: 8825.00,
             contractFee: 400.00,
             leasingPrincipal: 26475.00,
-            totalInterest: 2601.57,
-            totalDebt: 38301.57,
+            totalInterest: 2657.62,
+            totalDebt: 38357.62,
             rateDescription: '6 mėn. EURIBOR + 1.69% (3.81%)',
             startDate: '2026-10-15',
             paymentDay: 15
@@ -58,11 +58,11 @@ const Toyota = {
     "num": 1,
     "date": "2026-10-15",
     "principal": 401.25,
-    "interest": 42.03,
-    "total": 443.28,
-    "remaining": 26475.0,
-    "irinaShare": 221.64,
-    "sergeyShare": 221.64,
+    "interest": 98.07,
+    "total": 499.32,
+    "remaining": 26474.99,
+    "irinaShare": 249.66,
+    "sergeyShare": 249.66,
     "irinaPaid": false,
     "bankPaid": false
   },
@@ -784,6 +784,15 @@ const Toyota = {
         const saved = Storage.get('toyota_data');
         if (saved && saved.contract && saved.schedule && saved.schedule.length > 0) {
             this.data = saved;
+            // Актуализация платежа №1 при загрузке старой версии (443.28 € -> 499.32 € по новому графику банка)
+            if (this.data.schedule[0] && this.data.schedule[0].total === 443.28 && !this.data.schedule[0].bankPaid) {
+                this.data.schedule[0].interest = 98.07;
+                this.data.schedule[0].total = 499.32;
+                this.data.schedule[0].remaining = 26474.99;
+                this.data.schedule[0].irinaShare = 249.66;
+                this.data.schedule[0].sergeyShare = 249.66;
+                this.save();
+            }
         } else {
             this.data = JSON.parse(JSON.stringify(this.DEFAULT_DATA));
             this.save();
@@ -798,13 +807,13 @@ const Toyota = {
 
     calcStats() {
         const d = this.data;
-        const totalCommitment = d.contract.totalDebt; // 38301.57
-        const halfShare = +(totalCommitment / 2).toFixed(2); // 19150.78
 
         // Стартовые выплаты
         let sergeyInitialPaid = 0;
         let irinaInitialPaid = 0;
+        let totalInitialExpenses = 0;
         d.initialExpenses.forEach(exp => {
+            totalInitialExpenses += (exp.amount || 0);
             sergeyInitialPaid += (exp.paidBySergey || 0);
             irinaInitialPaid += (exp.paidByIrina || 0);
         });
@@ -814,10 +823,17 @@ const Toyota = {
         let irinaMonthlyPaid = 0;
         let totalMonthlyPaid = 0;
         let paidMonthsCount = 0;
+        let totalSchedulePayments = 0;
+        let totalScheduleInterest = 0;
 
         d.schedule.forEach(row => {
+            const rowTotal = parseFloat(row.total) || 0;
+            const rowInterest = parseFloat(row.interest) || 0;
+            totalSchedulePayments += rowTotal;
+            totalScheduleInterest += rowInterest;
+
             if (row.bankPaid) {
-                totalMonthlyPaid += row.total;
+                totalMonthlyPaid += rowTotal;
                 sergeyMonthlyPaid += (row.sergeyShare || 0);
                 paidMonthsCount++;
             }
@@ -825,6 +841,15 @@ const Toyota = {
                 irinaMonthlyPaid += (row.irinaShare || 0);
             }
         });
+
+        // Динамический расчёт общей суммы обязательств (Авансы + Договор + График 60 платежей)
+        // Автоматически реагирует на любые будущие изменения ставки EURIBOR при редактировании месяцев!
+        const totalCommitment = +(totalInitialExpenses + totalSchedulePayments).toFixed(2);
+        const halfShare = +(totalCommitment / 2).toFixed(2);
+
+        // Синхронизируем показатели в объекте договора
+        d.contract.totalDebt = totalCommitment;
+        d.contract.totalInterest = +(totalScheduleInterest).toFixed(2);
 
         const totalPaidOverall = sergeyInitialPaid + irinaInitialPaid + totalMonthlyPaid;
         const totalRemainingOverall = Math.max(0, totalCommitment - totalPaidOverall);
