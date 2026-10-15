@@ -51,9 +51,11 @@ const Categories = {
         }
     },
 
-    getAll() {
+    getAll(type) {
         const cats = Storage.get(this.STORAGE_KEY) || {};
-        return { mandatory: [], current: [], income: [], ...cats };
+        const res = { mandatory: [], current: [], income: [], ...cats };
+        if (type && res[type]) return res[type];
+        return res;
     },
 
     save(cats) {

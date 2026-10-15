@@ -117,6 +117,10 @@ const Journal = {
         this.filterAccount = 'all';
     },
 
+    addTransaction(data) {
+        return this.add(data);
+    },
+
     update(id, newData) {
         const list = this.getAll();
         const tx = list.find(t => t.id === id);

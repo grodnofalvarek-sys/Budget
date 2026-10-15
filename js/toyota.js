@@ -1277,8 +1277,10 @@ const Toyota = {
             if (addIncome && typeof Journal !== 'undefined' && typeof Accounts !== 'undefined') {
                 const bankAcc = Accounts.getAll().find(a => a.name === 'Банк') || Accounts.getDefault();
                 if (bankAcc) {
-                    const incCategory = Categories.getAll('income')[0];
-                    Journal.addTransaction({
+                    const allCats = (typeof Categories !== 'undefined' && Categories.getAll) ? Categories.getAll() : {};
+                    const incCategories = allCats.income || [];
+                    const incCategory = incCategories.find(c => c.name.toLowerCase().includes('возврат') || c.name.toLowerCase().includes('прочее')) || incCategories[0] || null;
+                    Journal.add({
                         date: payDate,
                         type: 'income',
                         amount: row.irinaShare,
@@ -1358,9 +1360,10 @@ const Toyota = {
             if (addExpense && typeof Journal !== 'undefined' && typeof Accounts !== 'undefined') {
                 const bankAcc = Accounts.getAll().find(a => a.name === 'Банк') || Accounts.getDefault();
                 if (bankAcc) {
-                    const mandCategories = Categories.getAll('mandatory');
-                    const toyotaCat = mandCategories.find(c => c.name.toLowerCase().includes('toyota') || c.name.toLowerCase().includes('лизинг')) || mandCategories[0];
-                    Journal.addTransaction({
+                    const allCats = (typeof Categories !== 'undefined' && Categories.getAll) ? Categories.getAll() : {};
+                    const mandCategories = allCats.mandatory || [];
+                    const toyotaCat = mandCategories.find(c => c.name.toLowerCase().includes('toyota') || c.name.toLowerCase().includes('лизинг')) || mandCategories[0] || null;
+                    Journal.add({
                         date: payDate,
                         type: 'expense',
                         expenseType: 'mandatory',
