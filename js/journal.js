@@ -194,19 +194,23 @@ const Journal = {
 
         // Переводы на сторонние счета (Общий счёт + Валюты только с личных счетов)
         let actualSharedTransfers = 0;
+        let monthSharedTxs = [];
         if (typeof Shared !== 'undefined' && Shared.getTransactions) {
             const sharedTxs = Shared.getTransactions() || [];
-            actualSharedTransfers = sharedTxs
-                .filter(t => t && t.type === 'my_deposit' && t.date && t.date.startsWith(monthStr))
+            monthSharedTxs = sharedTxs
+                .filter(t => t && t.type === 'my_deposit' && t.date && t.date.startsWith(monthStr));
+            actualSharedTransfers = monthSharedTxs
                 .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
         }
 
         let actualCurrencyTransfers = 0;
+        let monthCurrencyTxs = [];
         if (typeof Currency !== 'undefined' && Currency.getTransactions) {
             const currTxs = Currency.getTransactions() || [];
-            actualCurrencyTransfers = currTxs
+            monthCurrencyTxs = currTxs
                 .filter(t => t && t.type === 'deposit' && t.date && t.date.startsWith(monthStr))
-                .filter(t => t.sourceAccountId && t.sourceAccountId !== 'shared')
+                .filter(t => t.sourceAccountId && t.sourceAccountId !== 'shared');
+            actualCurrencyTransfers = monthCurrencyTxs
                 .reduce((s, t) => s + (parseFloat(t.spentEur) || 0), 0);
         }
 
@@ -246,19 +250,16 @@ const Journal = {
             .reduce((s, t) => s + t.amount, 0);
 
         let sharedSoFar = 0;
-        if (typeof Shared !== 'undefined' && Shared.getTransactions) {
-            const sharedTxs = Shared.getTransactions() || [];
-            sharedSoFar = sharedTxs
-                .filter(t => t && t.type === 'my_deposit' && t.date && t.date.startsWith(monthStr) && (!this.selectedDate || t.date <= this.selectedDate))
+        if (monthSharedTxs.length > 0) {
+            sharedSoFar = monthSharedTxs
+                .filter(t => !this.selectedDate || t.date <= this.selectedDate)
                 .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
         }
 
         let currencySoFar = 0;
-        if (typeof Currency !== 'undefined' && Currency.getTransactions) {
-            const currTxs = Currency.getTransactions() || [];
-            currencySoFar = currTxs
-                .filter(t => t && t.type === 'deposit' && t.date && t.date.startsWith(monthStr) && (!this.selectedDate || t.date <= this.selectedDate))
-                .filter(t => t.sourceAccountId && t.sourceAccountId !== 'shared')
+        if (monthCurrencyTxs.length > 0) {
+            currencySoFar = monthCurrencyTxs
+                .filter(t => !this.selectedDate || t.date <= this.selectedDate)
                 .reduce((s, t) => s + (parseFloat(t.spentEur) || 0), 0);
         }
 
@@ -271,8 +272,47 @@ const Journal = {
         const isOverBudget = dailyPlan > 0 && variableExpensesSoFar > plannedSoFar;
         const diffDaily = Math.abs(averageDailyExpense - dailyPlan);
 
+        // Формирование строк внешних переводов для отображения в Журнале
+        const sharedRows = monthSharedTxs.map(t => ({
+            id: `shared_${t.id}`,
+            realId: t.id,
+            origin: 'shared',
+            type: 'transfer_shared',
+            expenseType: 'transfer',
+            date: t.date,
+            accountId: t.accountId,
+            amount: parseFloat(t.amount) || 0,
+            categoryName: '🤝 Взнос на Общий счёт',
+            note: t.note || '',
+            createdAt: t.createdAt || ''
+        }));
+
+        const currAccounts = (typeof Currency !== 'undefined' && Currency.getAccounts) ? Currency.getAccounts() : [];
+        const currencyRows = monthCurrencyTxs.map(t => {
+            const targetAcc = currAccounts.find(a => a.id === t.currencyAccountId);
+            const targetLabel = targetAcc ? `${targetAcc.name} (${targetAcc.code})` : 'Валютный кошелёк';
+            const rateStr = t.rate ? ` @ ${t.rate}` : '';
+            const localStr = t.amountLocal ? ` (+${t.amountLocal} ${targetAcc?.symbol || targetAcc?.code || ''})` : '';
+            return {
+                id: `curr_${t.id}`,
+                realId: t.id,
+                origin: 'currency',
+                type: 'transfer_currency',
+                expenseType: 'transfer',
+                date: t.date,
+                accountId: t.sourceAccountId,
+                amount: parseFloat(t.spentEur) || 0,
+                categoryName: `💱 Покупка валюты (${targetLabel})`,
+                note: t.note ? `${t.note}${localStr}${rateStr}` : `${targetLabel}${localStr}${rateStr}`,
+                createdAt: t.createdAt || ''
+            };
+        });
+
+        // Объединённый список транзакций (включая внешние переводы с личных счетов)
+        const combinedMonthTx = [...monthTx, ...sharedRows, ...currencyRows];
+
         // Фильтрация списка транзакций для таблицы
-        let filteredTx = monthTx;
+        let filteredTx = combinedMonthTx;
         if (this.selectedDate) {
             filteredTx = filteredTx.filter(t => t.date === this.selectedDate);
         }
@@ -280,6 +320,7 @@ const Journal = {
             if (this.filterType === 'income') filteredTx = filteredTx.filter(t => t.type === 'income');
             else if (this.filterType === 'mandatory') filteredTx = filteredTx.filter(t => t.type === 'expense' && t.expenseType === 'mandatory');
             else if (this.filterType === 'current') filteredTx = filteredTx.filter(t => t.type === 'expense' && t.expenseType === 'current');
+            else if (this.filterType === 'transfers') filteredTx = filteredTx.filter(t => t.type === 'transfer_shared' || t.type === 'transfer_currency');
         }
         if (this.filterAccount !== 'all') {
             filteredTx = filteredTx.filter(t => t.accountId === this.filterAccount);
@@ -353,6 +394,7 @@ const Journal = {
                         <option value="income" ${this.filterType === 'income' ? 'selected' : ''}>💰 Доходы</option>
                         <option value="mandatory" ${this.filterType === 'mandatory' ? 'selected' : ''}>🔒 Обязательные</option>
                         <option value="current" ${this.filterType === 'current' ? 'selected' : ''}>💳 Текущие</option>
+                        <option value="transfers" ${this.filterType === 'transfers' ? 'selected' : ''}>↔️ Переводы</option>
                     </select>
                 </div>
                 <div class="filter-group">
@@ -383,11 +425,22 @@ const Journal = {
                         ${filteredTx.map(t => {
                             const isIncome = t.type === 'income';
                             const isMandatory = t.type === 'expense' && t.expenseType === 'mandatory';
-                            const typeBadge = isIncome 
-                                ? '<span class="badge badge-success">Доход</span>'
-                                : (isMandatory ? '<span class="badge badge-warning">Обязательный</span>' : '<span class="badge">Текущий</span>');
+                            const isSharedTransfer = t.type === 'transfer_shared';
+                            const isCurrTransfer = t.type === 'transfer_currency';
+                            const isTransfer = isSharedTransfer || isCurrTransfer;
+
+                            let typeBadge = '<span class="badge">Текущий</span>';
+                            if (isIncome) {
+                                typeBadge = '<span class="badge badge-success">Доход</span>';
+                            } else if (isMandatory) {
+                                typeBadge = '<span class="badge badge-warning">Обязательный</span>';
+                            } else if (isSharedTransfer) {
+                                typeBadge = '<span class="badge" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.3);">🤝 Общий счёт</span>';
+                            } else if (isCurrTransfer) {
+                                typeBadge = '<span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.3);">💱 Валюта</span>';
+                            }
                             
-                            const categoryName = this.getCategoryName(t.categoryId, t.type, t.expenseType);
+                            const categoryName = t.categoryName || this.getCategoryName(t.categoryId, t.type, t.expenseType);
                             const accountName = Accounts.accountName(t.accountId);
 
                             return `
@@ -396,12 +449,12 @@ const Journal = {
                                     <td class="tx-type">${typeBadge}</td>
                                     <td class="tx-category">${categoryName}</td>
                                     <td class="tx-account">${accountName}</td>
-                                    <td class="tx-amount ${isIncome ? 'positive' : 'negative'}">
+                                    <td class="tx-amount ${isIncome ? 'positive' : 'negative'}" ${isTransfer ? 'style="color: #60a5fa;"' : ''}>
                                         ${isIncome ? '+' : '-'}${formatMoney(t.amount)}
                                     </td>
                                     <td class="tx-note">${t.note || '-'}</td>
                                     <td class="tx-actions">
-                                        <button class="btn-icon" data-action="edit-tx" data-id="${t.id}" title="Редактировать">✏️</button>
+                                        <button class="btn-icon" data-action="edit-tx" data-id="${t.id}" title="${isTransfer ? 'Перейти к разделу счёта' : 'Редактировать'}">${isTransfer ? '↗️' : '✏️'}</button>
                                         <button class="btn-icon" data-action="delete-tx" data-id="${t.id}" title="Удалить">🗑️</button>
                                     </td>
                                 </tr>
@@ -473,8 +526,44 @@ const Journal = {
             const { action, id } = btn.dataset;
 
             if (action === 'edit-tx') {
+                if (id && id.startsWith('shared_')) {
+                    if (typeof App !== 'undefined' && App.navigate) {
+                        App.navigate('shared');
+                    } else {
+                        window.location.hash = '#shared';
+                    }
+                    return;
+                }
+                if (id && id.startsWith('curr_')) {
+                    if (typeof App !== 'undefined' && App.navigate) {
+                        App.navigate('currency');
+                    } else {
+                        window.location.hash = '#currency';
+                    }
+                    return;
+                }
                 this.showAddModal(id);
             } else if (action === 'delete-tx') {
+                if (id && id.startsWith('shared_')) {
+                    const realId = id.replace('shared_', '');
+                    App.showConfirm('Удалить эту операцию взноса на Общий счёт? Сумма вернётся на счёт списания.', () => {
+                        if (typeof Shared !== 'undefined' && Shared.removeTransaction) {
+                            Shared.removeTransaction(realId);
+                            App.renderPage();
+                        }
+                    });
+                    return;
+                }
+                if (id && id.startsWith('curr_')) {
+                    const realId = id.replace('curr_', '');
+                    App.showConfirm('Удалить эту операцию покупки валюты? Сумма вернётся на счёт списания.', () => {
+                        if (typeof Currency !== 'undefined' && Currency.removeTransaction) {
+                            Currency.removeTransaction(realId);
+                            App.renderPage();
+                        }
+                    });
+                    return;
+                }
                 App.showConfirm('Удалить эту запись?', () => {
                     this.remove(id);
                     App.renderPage();
